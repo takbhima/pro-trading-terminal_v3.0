@@ -1,2 +1,4 @@
-from .bar_tracker import BarStateTracker
-__all__ = ["BarStateTracker"]
+from .bar_tracker     import BarStateTracker
+from .signal_cooldown import SignalCooldownTracker
+
+__all__ = ["BarStateTracker", "SignalCooldownTracker"]

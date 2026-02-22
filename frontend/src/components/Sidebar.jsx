@@ -1,24 +1,23 @@
 /**
- * Sidebar — Single Responsibility: tab navigation container.
- * Each tab panel is its own component (SRP).
+ * Sidebar — Tab container with added Analytics tab (E2).
  *
- * BUG FIX: Now receives `strategy` prop and passes it to SignalTab.
- * Previously SignalTab had no way to know the active strategy and
- * hardcoded "pro_mtf" in its own useChartData call, so the signal
- * panel was always wrong when any other strategy was selected.
+ * Enhancement 2: AnalyticsTab shows persistent SQLite-backed PnL history.
+ * Enhancement 4: requireMtf prop passed through to SignalTab.
  */
 import { useState } from "react";
-import SignalTab  from "./SignalTab";
-import NewsTab    from "./NewsTab";
-import PredictTab from "./PredictTab";
+import SignalTab    from "./SignalTab";
+import NewsTab      from "./NewsTab";
+import PredictTab   from "./PredictTab";
+import AnalyticsTab from "./AnalyticsTab";
 
 const TABS = [
-  { id: "signal",  label: "📌 Signal"  },
-  { id: "news",    label: "📰 News"    },
-  { id: "predict", label: "🤖 Predict" },
+  { id: "signal",    label: "📌 Signal"    },
+  { id: "news",      label: "📰 News"      },
+  { id: "predict",   label: "🤖 Predict"   },
+  { id: "analytics", label: "📊 Analytics" },  // E2
 ];
 
-export default function Sidebar({ symbol, interval, strategy }) {
+export default function Sidebar({ symbol, interval, strategy, requireMtf, fetchKey = 0 }) {
   const [activeTab, setActiveTab] = useState("signal");
 
   return (
@@ -35,15 +34,17 @@ export default function Sidebar({ symbol, interval, strategy }) {
         ))}
       </div>
 
-      <div className={`sb-panel${activeTab === "signal"  ? " active" : ""}`}>
-        {/* Pass strategy down so SignalTab fetches the correct strategy's signals */}
-        <SignalTab symbol={symbol} interval={interval} strategy={strategy} />
+      <div className={`sb-panel${activeTab === "signal"    ? " active" : ""}`}>
+        <SignalTab symbol={symbol} interval={interval} strategy={strategy} requireMtf={requireMtf} fetchKey={fetchKey} />
       </div>
-      <div className={`sb-panel${activeTab === "news"    ? " active" : ""}`}>
-        {activeTab === "news"    && <NewsTab symbol={symbol} />}
+      <div className={`sb-panel${activeTab === "news"      ? " active" : ""}`}>
+        {activeTab === "news"      && <NewsTab symbol={symbol} />}
       </div>
-      <div className={`sb-panel${activeTab === "predict" ? " active" : ""}`}>
-        {activeTab === "predict" && <PredictTab symbol={symbol} interval={interval} />}
+      <div className={`sb-panel${activeTab === "predict"   ? " active" : ""}`}>
+        {activeTab === "predict"   && <PredictTab symbol={symbol} interval={interval} />}
+      </div>
+      <div className={`sb-panel${activeTab === "analytics" ? " active" : ""}`}>
+        {activeTab === "analytics" && <AnalyticsTab />}
       </div>
     </aside>
   );

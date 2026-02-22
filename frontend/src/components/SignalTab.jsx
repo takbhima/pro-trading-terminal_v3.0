@@ -1,14 +1,7 @@
 /**
- * SignalTab — Single Responsibility: display latest signal, active trade, exit events.
- *
- * BUG FIXES applied:
- *  1. activeTrade PnL class was always "profit" due to wrong ternary
- *  2. exit history template literal had unmatched quote `var(--red'`
- *  3. Signal WHY uses pure utility function, not inline template strings
- *  4. [NEW FIX] useChartData was hardcoded to "pro_mtf" — sidebar signal panel
- *     never reflected the user's chosen strategy. Now receives `strategy` as a
- *     prop from Sidebar and passes it through so chart data + signals always
- *     match the active strategy selection.
+ * SignalTab — v4 update: passes requireMtf to useChartData (E4).
+ * Also triggers audio beep on new WS signals via playSignalBeep (E5 — done in App).
+ * All other functionality unchanged from v3.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWebSocket }  from "../context/WebSocketContext";
@@ -16,7 +9,7 @@ import { useTrade }      from "../context/TradeContext";
 import { useChartData }  from "../hooks/useChartData";
 import { fmt, elapsedMins, getWhyReasons, exitReasonClass } from "../utils/utils";
 
-// ── Hero Signal Card ───────────────────────────────────────────────────────
+// ── Hero Signal Card ────────────────────────────────────────────────────────
 function HeroSignal({ signal, strategy }) {
   if (!signal) return null;
   const reasons = getWhyReasons(strategy, signal);
@@ -51,7 +44,7 @@ function HeroSignal({ signal, strategy }) {
   );
 }
 
-// ── Active Trade Panel ─────────────────────────────────────────────────────
+// ── Active Trade Panel ──────────────────────────────────────────────────────
 function ActiveTradePanel({ trade, livePrice, livePnl, onClose }) {
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
@@ -103,7 +96,7 @@ function ActiveTradePanel({ trade, livePrice, livePnl, onClose }) {
   );
 }
 
-// ── Exit Banner ────────────────────────────────────────────────────────────
+// ── Exit Banner ─────────────────────────────────────────────────────────────
 function ExitBanner({ exit, onDismiss }) {
   if (!exit) return null;
 
@@ -133,7 +126,7 @@ function ExitBanner({ exit, onDismiss }) {
   );
 }
 
-// ── Risk Calculator ────────────────────────────────────────────────────────
+// ── Risk Calculator ──────────────────────────────────────────────────────────
 function RiskCalculator({ defaultEntry, defaultSL }) {
   const [capital, setCapital] = useState(100000);
   const [riskPct, setRiskPct] = useState(1);
@@ -145,14 +138,14 @@ function RiskCalculator({ defaultEntry, defaultSL }) {
   useEffect(() => { if (defaultSL)    setSL(defaultSL); },    [defaultSL]);
 
   const calc = () => {
-    const cap     = parseFloat(capital) || 0;
-    const rp      = parseFloat(riskPct) || 1;
-    const ent     = parseFloat(entry)   || 0;
-    const stopLoss = parseFloat(sl)     || 0;
+    const cap      = parseFloat(capital) || 0;
+    const rp       = parseFloat(riskPct) || 1;
+    const ent      = parseFloat(entry)   || 0;
+    const stopLoss = parseFloat(sl)      || 0;
     if (!ent || !stopLoss || ent === stopLoss) return;
-    const riskAmt  = cap * (rp / 100);
-    const perUnit  = Math.abs(ent - stopLoss);
-    const qty      = Math.max(1, Math.floor(riskAmt / perUnit));
+    const riskAmt = cap * (rp / 100);
+    const perUnit = Math.abs(ent - stopLoss);
+    const qty     = Math.max(1, Math.floor(riskAmt / perUnit));
     setResult({ qty, riskAmt, totalVal: qty * ent, perUnit });
   };
 
@@ -178,7 +171,7 @@ function RiskCalculator({ defaultEntry, defaultSL }) {
   );
 }
 
-// ── Signal History Card ────────────────────────────────────────────────────
+// ── Signal History Card ──────────────────────────────────────────────────────
 function SignalHistoryCard({ sig, label }) {
   const isBuy = sig.type === "BUY" || sig.signal_type === "BUY";
   return (
@@ -202,61 +195,66 @@ function SignalHistoryCard({ sig, label }) {
   );
 }
 
-// ── Main SignalTab ─────────────────────────────────────────────────────────
-// FIX 4: Receives `strategy` as a prop (passed down from Sidebar → SignalTab).
-// Previously `useChartData` was always called with the hardcoded string
-// "pro_mtf", meaning the sidebar signal panel showed signals from the wrong
-// strategy whenever the user picked VWAP, Bollinger, etc. in the StrategyBar.
-export default function SignalTab({ symbol, interval, strategy }) {
-  const { lastSignal }                      = useWebSocket();
+// ── Main SignalTab ───────────────────────────────────────────────────────────
+export default function SignalTab({ symbol, interval, strategy, requireMtf, fetchKey = 0 }) {
+  const { lastSignal }                          = useWebSocket();
   const { activeTrade, livePrice, livePnl,
           lastExitEv, dismissExit, forceClose } = useTrade();
 
-  // Use the active strategy prop — was hardcoded to "pro_mtf" before
-  const { data } = useChartData(symbol.yahoo, interval, strategy);
+  // E4: pass requireMtf so chart data matches MTF filter state
+  const { data } = useChartData(symbol.yahoo, interval, strategy, requireMtf, fetchKey);
 
   const [heroSignal,  setHeroSignal]  = useState(null);
   const [sigHistory,  setSigHistory]  = useState([]);
   const [sigStrategy, setSigStrategy] = useState(strategy);
-  const seededSymRef = useRef(null);
+  const seededKeyRef = useRef(null);
 
-  // Re-seed when the strategy prop changes (user switches strategy in StrategyBar)
+  // Clear signal display immediately on ANY key dimension change (symbol, interval, strategy, mtf).
+  // This prevents the old signal from staying frozen on screen while new chart data loads.
   useEffect(() => {
-    seededSymRef.current = null;
-  }, [strategy]);
+    seededKeyRef.current = null;
+    setHeroSignal(null);
+    setSigHistory([]);
+  }, [symbol.yahoo, interval, strategy, requireMtf, fetchKey]);
 
-  // Seed hero signal + history from chart data whenever symbol/interval/strategy loads
+  // Seed Latest Signal + history from REST response once per unique (sym/iv/strat/mtf) combo.
+  // Guard: data must be non-null AND the response's strategy must match the currently
+  // selected strategy — prevents stale data from a previous strategy re-seeding the panel
+  // during the brief window between a strategy switch and the new fetch resolving.
   useEffect(() => {
     if (!data) return;
-    const key = `${symbol.yahoo}__${interval}__${strategy}`;
-    if (seededSymRef.current === key) return;
-    seededSymRef.current = key;
+
+    // Use the echoed-back strategy_used / interval_used fields from the API response
+    // to detect and discard stale responses that arrived after the user already switched.
+    // Falls back to signal-level strategy field if strategy_used is not present.
+    const responseStrategy = data.strategy_used || data.latest_signal?.strategy || data.signals?.[0]?.strategy;
+    const responseInterval  = data.interval_used;
+    if (responseStrategy && responseStrategy !== strategy) return;   // stale — wrong strategy
+    if (responseInterval  && responseInterval  !== interval) return;  // stale — wrong interval
+
+    const key = `${symbol.yahoo}__${interval}__${strategy}__${requireMtf}`;
+    if (seededKeyRef.current === key) return;  // already seeded this exact response
+    seededKeyRef.current = key;
 
     if (data.signals?.length) {
       const historical = [...data.signals]
         .reverse()
         .slice(0, 60)
-        .map((s) => ({
-          ...s,
-          symbol: symbol.label,
-          type:   s.signal_type || s.type,
-          ts:     "",
-        }));
+        .map((s) => ({ ...s, symbol: symbol.label, type: s.signal_type || s.type, ts: "" }));
       setSigHistory(historical);
     }
-
     if (data.latest_signal) {
       setHeroSignal({ ...data.latest_signal, symbol: symbol.label });
       setSigStrategy(data.latest_signal.strategy || strategy);
     }
-  }, [data, symbol.yahoo, symbol.label, interval, strategy]);
+  }, [data, symbol.yahoo, symbol.label, interval, strategy, requireMtf, fetchKey]);
 
-  // Push live WS signal to top of history
+  // Live WebSocket signal push from watchlist scan — always takes priority.
   useEffect(() => {
     if (!lastSignal) return;
     const enriched = {
       ...lastSignal,
-      type: lastSignal.signal_type || lastSignal.type_,
+      type: lastSignal.signal_type || lastSignal.type,
       ts:   new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
     };
     setHeroSignal(enriched);
@@ -268,12 +266,6 @@ export default function SignalTab({ symbol, interval, strategy }) {
     }
   }, [lastSignal]);
 
-  // Reset when symbol changes so stale data from previous symbol is cleared
-  useEffect(() => {
-    setHeroSignal(null);
-    setSigHistory([]);
-  }, [symbol.yahoo]);
-
   const handleClose = async () => {
     await forceClose(symbol.yahoo, livePrice || 0);
   };
@@ -283,21 +275,21 @@ export default function SignalTab({ symbol, interval, strategy }) {
   return (
     <div className="sig-tab">
       <div className="sig-panel">
-        <div className="p-title">Latest Signal</div>
+        <div className="p-title">
+          Latest Signal
+          {requireMtf && <span className="mtf-badge on" style={{ marginLeft: 6 }}>MTF</span>}
+        </div>
 
         {heroSignal && !activeTrade && !lastExitEv && (
           <HeroSignal signal={heroSignal} strategy={sigStrategy} />
         )}
-
         <ActiveTradePanel
           trade={activeTrade}
           livePrice={livePrice}
           livePnl={livePnl}
           onClose={handleClose}
         />
-
         <ExitBanner exit={lastExitEv} onDismiss={dismissExit} />
-
         {showNothing && (
           <div className="no-signal">
             <div className="ns-icon">📡</div>

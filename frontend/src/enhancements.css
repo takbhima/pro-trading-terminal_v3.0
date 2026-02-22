@@ -1,0 +1,181 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Enhancement CSS additions — append to frontend/src/index.css
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── E4 — MTF Toggle ─────────────────────────────────────────────────────── */
+.mtf-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  background: transparent;
+  color: var(--subtext);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+  transition: all .15s;
+  margin-left: 4px;
+}
+.mtf-toggle:hover { border-color: var(--yellow); color: var(--text); }
+.mtf-toggle.active {
+  background: rgba(255,214,0,.1);
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.mtf-icon { font-size: 11px; }
+.mtf-badge {
+  font-size: 8px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 2px;
+  letter-spacing: .5px;
+}
+.mtf-badge.on  { background: rgba(255,214,0,.2); color: var(--yellow); }
+.mtf-badge.off { background: var(--border); color: var(--dim); }
+
+/* ── E5 — Notification Banner ────────────────────────────────────────────── */
+.notif-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: rgba(41,121,255,.12);
+  border-bottom: 1px solid rgba(41,121,255,.3);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text);
+  animation: slideDown .3s ease;
+}
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.notif-icon { font-size: 14px; flex-shrink: 0; }
+.notif-text { flex: 1; line-height: 1.4; color: var(--subtext); }
+.notif-allow {
+  padding: 4px 12px;
+  background: var(--blue);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.notif-allow:hover { filter: brightness(1.2); }
+.notif-dismiss {
+  background: none;
+  border: none;
+  color: var(--subtext);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.notif-dismiss:hover { color: var(--text); }
+
+/* ── E6 — Modal symbol validation ───────────────────────────────────────── */
+.m-sym-wrap { position: relative; }
+.m-inp.valid  { border-color: var(--green); }
+.m-inp.invalid { border-color: var(--red); }
+.m-val-status {
+  font-size: 10px;
+  padding: 2px 4px;
+  min-height: 18px;
+  margin-bottom: 4px;
+}
+.m-val-checking { color: var(--subtext); }
+.m-val-ok  { color: var(--green); font-weight: 600; }
+.m-val-err { color: var(--red); font-weight: 600; }
+.m-hint {
+  font-size: 10px;
+  color: var(--subtext);
+  padding: 2px 4px;
+  margin-bottom: 4px;
+}
+.m-hint em { color: var(--text); font-style: normal; }
+
+/* ── E2 — Analytics Tab ─────────────────────────────────────────────────── */
+.analytics-panel { overflow-y: auto; padding: 8px; flex: 1; }
+.analytics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.analytics-title { font-size: 11px; font-weight: 700; }
+.analytics-refresh {
+  padding: 3px 8px; background: var(--border2); border: none; border-radius: 3px;
+  color: var(--text); font-size: 10px; cursor: pointer;
+}
+.analytics-refresh:hover { background: var(--blue); }
+.analytics-empty {
+  text-align: center; color: var(--subtext); font-size: 11px;
+  padding: 20px 8px; line-height: 1.8;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.stat-box {
+  background: var(--card);
+  border-radius: 4px;
+  padding: 6px 8px;
+  text-align: center;
+}
+.stat-lbl { font-size: 8px; color: var(--subtext); text-transform: uppercase; letter-spacing: .5px; }
+.stat-val { font-family: var(--font-mono); font-size: 14px; font-weight: 800; margin-top: 2px; }
+
+.win-bar-wrap {
+  display: flex;
+  height: 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.win-bar  { background: var(--green); transition: width .5s ease; }
+.loss-bar { background: var(--red); }
+.win-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.strat-breakdown { margin-top: 6px; }
+.sb-title { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--subtext); margin-bottom: 5px; }
+.sb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--card);
+  border-radius: 3px;
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+.sb-strat { flex: 1; color: var(--subtext); font-family: var(--font-mono); }
+.sb-wr    { font-weight: 700; font-size: 10px; }
+.sb-pnl   { font-family: var(--font-mono); font-weight: 700; font-size: 10px; }
+
+/* ── Sidebar — 4-tab layout (shrink font a bit) ──────────────────────────── */
+.sb-tab { font-size: 9px; padding: 5px 2px; }
+
+/* MTF active badge in chart toolbar */
+.mtf-active-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(255,214,0,.15);
+  color: var(--yellow);
+  border: 1px solid rgba(255,214,0,.3);
+  letter-spacing: .5px;
+}
