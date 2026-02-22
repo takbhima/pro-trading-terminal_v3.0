@@ -1,9 +1,14 @@
 /**
  * SignalTab — Single Responsibility: display latest signal, active trade, exit events.
+ *
  * BUG FIXES applied:
  *  1. activeTrade PnL class was always "profit" due to wrong ternary
  *  2. exit history template literal had unmatched quote `var(--red'`
  *  3. Signal WHY uses pure utility function, not inline template strings
+ *  4. [NEW FIX] useChartData was hardcoded to "pro_mtf" — sidebar signal panel
+ *     never reflected the user's chosen strategy. Now receives `strategy` as a
+ *     prop from Sidebar and passes it through so chart data + signals always
+ *     match the active strategy selection.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWebSocket }  from "../context/WebSocketContext";
@@ -65,7 +70,6 @@ function ActiveTradePanel({ trade, livePrice, livePnl, onClose }) {
   const progress = Math.min(100, (elapsed / estMin) * 100);
   const progColor = progress > 80 ? "var(--yellow)" : trade.side === "BUY" ? "var(--green)" : "var(--red)";
 
-  // BUG FIX: was `el.className = 'profit' ? ... : 'loss'` — always truthy
   const pnlClass = livePnl != null ? (livePnl >= 0 ? "profit" : "loss") : "";
   const pnlSign  = livePnl != null && livePnl >= 0 ? "+" : "";
 
@@ -103,7 +107,6 @@ function ActiveTradePanel({ trade, livePrice, livePnl, onClose }) {
 function ExitBanner({ exit, onDismiss }) {
   if (!exit) return null;
 
-  // BUG FIX: was `'var(--red')` — unmatched quote in template literal
   const isProfit  = exit.pnl >= 0;
   const pnlSign   = isProfit ? "+" : "";
   const reasonCls = exitReasonClass(exit.exit_reason);
@@ -200,24 +203,35 @@ function SignalHistoryCard({ sig, label }) {
 }
 
 // ── Main SignalTab ─────────────────────────────────────────────────────────
-export default function SignalTab({ symbol, interval }) {
+// FIX 4: Receives `strategy` as a prop (passed down from Sidebar → SignalTab).
+// Previously `useChartData` was always called with the hardcoded string
+// "pro_mtf", meaning the sidebar signal panel showed signals from the wrong
+// strategy whenever the user picked VWAP, Bollinger, etc. in the StrategyBar.
+export default function SignalTab({ symbol, interval, strategy }) {
   const { lastSignal }                      = useWebSocket();
   const { activeTrade, livePrice, livePnl,
           lastExitEv, dismissExit, forceClose } = useTrade();
-  const { data }                            = useChartData(symbol.yahoo, interval, "pro_mtf");
-  const [heroSignal,  setHeroSignal]        = useState(null);
-  const [sigHistory,  setSigHistory]        = useState([]);
-  const [strategy,    setStrategy]          = useState("pro_mtf");
-  const seededSymRef = useRef(null);  // track which symbol's history we've seeded
 
-  // Seed hero signal + history from chart data whenever symbol/interval loads
+  // Use the active strategy prop — was hardcoded to "pro_mtf" before
+  const { data } = useChartData(symbol.yahoo, interval, strategy);
+
+  const [heroSignal,  setHeroSignal]  = useState(null);
+  const [sigHistory,  setSigHistory]  = useState([]);
+  const [sigStrategy, setSigStrategy] = useState(strategy);
+  const seededSymRef = useRef(null);
+
+  // Re-seed when the strategy prop changes (user switches strategy in StrategyBar)
+  useEffect(() => {
+    seededSymRef.current = null;
+  }, [strategy]);
+
+  // Seed hero signal + history from chart data whenever symbol/interval/strategy loads
   useEffect(() => {
     if (!data) return;
-    const key = `${symbol.yahoo}__${interval}`;
-    if (seededSymRef.current === key) return; // don't re-seed on minor re-renders
+    const key = `${symbol.yahoo}__${interval}__${strategy}`;
+    if (seededSymRef.current === key) return;
     seededSymRef.current = key;
 
-    // Build history from all historical chart signals (most recent first, max 60)
     if (data.signals?.length) {
       const historical = [...data.signals]
         .reverse()
@@ -225,31 +239,28 @@ export default function SignalTab({ symbol, interval }) {
         .map((s) => ({
           ...s,
           symbol: symbol.label,
-          // Normalise type field — chart signals use `type`, WS signals use `signal_type`
           type:   s.signal_type || s.type,
-          ts:     "", // historical — no local timestamp
+          ts:     "",
         }));
       setSigHistory(historical);
     }
 
     if (data.latest_signal) {
       setHeroSignal({ ...data.latest_signal, symbol: symbol.label });
-      setStrategy(data.latest_signal.strategy || "pro_mtf");
+      setSigStrategy(data.latest_signal.strategy || strategy);
     }
-  }, [data, symbol.yahoo, symbol.label, interval]);
+  }, [data, symbol.yahoo, symbol.label, interval, strategy]);
 
   // Push live WS signal to top of history
   useEffect(() => {
     if (!lastSignal) return;
     const enriched = {
       ...lastSignal,
-      // BUG FIX: WS sends `signal_type` for BUY/SELL direction, not `type`
       type: lastSignal.signal_type || lastSignal.type_,
       ts:   new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
     };
     setHeroSignal(enriched);
     setSigHistory((prev) => [enriched, ...prev].slice(0, 60));
-    // Browser notification
     if (Notification.permission === "granted") {
       new Notification(`${enriched.type} — ${enriched.symbol || symbol.label}`, {
         body: `Entry: ${fmt(enriched.price)}  SL: ${fmt(enriched.sl)}  TP: ${fmt(enriched.tp)}`,
@@ -275,7 +286,7 @@ export default function SignalTab({ symbol, interval }) {
         <div className="p-title">Latest Signal</div>
 
         {heroSignal && !activeTrade && !lastExitEv && (
-          <HeroSignal signal={heroSignal} strategy={strategy} />
+          <HeroSignal signal={heroSignal} strategy={sigStrategy} />
         )}
 
         <ActiveTradePanel

@@ -2,6 +2,11 @@
  * App.jsx — React composition root
  * Mirrors main.py's role: wires all providers and top-level layout.
  * Each panel is a single-responsibility component.
+ *
+ * BUG FIX: `strategy` state is now passed to <Sidebar> so it reaches
+ * <SignalTab> and useChartData fetches the correct strategy's signals.
+ * Previously Sidebar received no strategy prop, so SignalTab fell back
+ * to the hardcoded "pro_mtf" regardless of user selection.
  */
 import { useState, useCallback } from "react";
 import { WebSocketProvider } from "./context/WebSocketContext";
@@ -48,9 +53,12 @@ export default function App() {
               interval={interval}
               strategy={strategy}
             />
+            {/* FIX: strategy prop added — was missing, causing SignalTab
+                to always use "pro_mtf" regardless of active strategy */}
             <Sidebar
               symbol={symbol}
               interval={interval}
+              strategy={strategy}
             />
           </div>
           {modal && (

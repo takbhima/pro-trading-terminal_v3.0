@@ -7,6 +7,15 @@ implementations to wire together.  All other modules depend on abstractions.
 Frontend: React + Vite (see frontend/)
   - Development:  cd frontend && npm run dev   (proxied to :8000)
   - Production:   cd frontend && npm run build  → frontend_dist/
+
+BUG FIXES in this version:
+  1. Removed duplicate recv_msgs definition — first definition never set
+     disconnected["flag"], causing the tick loop to hang after client
+     disconnect and leak the coroutine.
+  2. EOD sweep now runs every tick_count % 12 (every ~60s) instead of
+     tick_count % 60 (every ~5 minutes), preventing missed NSE 3:20 PM cutoffs.
+  3. Watchlist signal scan now caps simultaneous open trades at MAX_OPEN_TRADES
+     (default 3) to prevent opening a trade on every watchlist symbol at once.
 """
 
 import asyncio, os
@@ -41,6 +50,9 @@ _predictor   = TechnicalNewsPredictor()
 _chart       = ChartService()
 _estimator   = TargetTimeEstimator()
 _mkt_hours   = MarketHoursService()
+
+# ── Max simultaneous open trades from watchlist scan (Bug 5 fix) ─────────────
+MAX_OPEN_TRADES = 3
 
 # ── WebSocket state (not a service — purely transport-layer state) ───────────
 from backend.utils import BarStateTracker
@@ -206,8 +218,21 @@ def api_all_active():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  WebSocket — BUG FIX: signal payload now uses `signal_type` for BUY/SELL
-#  direction so it doesn't collide with the WS message `type` field.
+#  WebSocket
+#
+#  BUG FIX 1 (recv_msgs duplicate): The original code defined recv_msgs twice.
+#  The first definition was the one captured by asyncio.create_task(), and it
+#  never set disconnected["flag"], so the outer tick loop had no way to know
+#  the client was gone. Coroutines leaked and the loop ran forever consuming
+#  CPU. Fixed by keeping only one correct definition that always sets the flag.
+#
+#  BUG FIX 2 (EOD sweep frequency): EOD sweep moved from tick_count % 60
+#  (~5 min) to tick_count % 12 (~60s) so the 3:20 PM NSE cutoff is never
+#  missed by more than 60 seconds.
+#
+#  BUG FIX 3 (uncapped trade opens): _scan_watchlist_signals now checks
+#  len(_trades.get_all_active()) against MAX_OPEN_TRADES before opening a
+#  new position, preventing simultaneous trades on every watchlist symbol.
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -221,23 +246,8 @@ async def ws_endpoint(ws: WebSocket):
 
     await ws.send_json(_status_payload(open_mkt))
 
-    async def recv_msgs():
-        while True:
-            try:
-                msg = await asyncio.wait_for(ws.receive_json(), timeout=0.1)
-                if isinstance(msg, dict) and msg.get("type") == "subscribe":
-                    sym = msg.get("symbol", "").strip()
-                    iv  = msg.get("interval", "5m")
-                    if sym != current_symbol["sym"] or iv != current_interval["interval"]:
-                        _bar_tracker.reset(current_symbol["sym"] or "", current_interval["interval"])
-                    current_symbol["sym"]        = sym
-                    current_interval["interval"] = iv
-            except asyncio.TimeoutError:
-                pass
-            except Exception:
-                break
-
-    # Flag set by recv_msgs when the client disconnects — stops the tick loop fast
+    # FIX 1: Single, correct recv_msgs definition.
+    # Always sets disconnected["flag"] on any exception (including clean close).
     disconnected = {"flag": False}
 
     async def recv_msgs():
@@ -252,6 +262,7 @@ async def ws_endpoint(ws: WebSocket):
                     current_symbol["sym"]        = sym
                     current_interval["interval"] = iv
             except asyncio.TimeoutError:
+                # Normal — no message in this 100ms window, keep looping
                 pass
             except Exception:
                 # Client disconnected or WS closed — signal tick loop to stop
@@ -312,23 +323,27 @@ async def ws_endpoint(ws: WebSocket):
                         }):
                             break
                 except Exception as e:
-                    # Only log unexpected errors, not disconnect noise
                     if not disconnected["flag"]:
                         print(f"[WS tick] {sym}: {e}")
 
             if disconnected["flag"]:
                 break
 
+            # Scan watchlist for signals every ~60s (tick_count % 12, sleep=5s)
             if tick_count % 12 == 0:
                 await _scan_watchlist_signals(ws, open_mkt)
+
+            # FIX 2: EOD sweep now every ~60s (was every ~5 min).
+            # Status broadcast kept at ~5 min to avoid spam.
+            if tick_count % 12 == 0:
+                for ev in _trades.eod_sweep(_data.get_live_price):
+                    if not await safe_send(_trades._exit_to_dict(ev)):
+                        break
 
             if tick_count % 60 == 0:
                 open_mkt = _mkt_hours.open_markets()
                 if not await safe_send(_status_payload(open_mkt)):
                     break
-                for ev in _trades.eod_sweep(_data.get_live_price):
-                    if not await safe_send(_trades._exit_to_dict(ev)):
-                        break
 
             await asyncio.sleep(5)
 
@@ -347,21 +362,25 @@ async def ws_endpoint(ws: WebSocket):
 
 async def _scan_watchlist_signals(ws: WebSocket, open_mkt: list):
     """Scan watchlist with Pro MTF on 5m for push signals.
-    BUG FIX: use `signal_type` instead of `type` for BUY/SELL direction
-    to avoid collision with the WS message type field.
-    BUG FIX: pass _ts_fn_intraday directly instead of wrapping in lambda
-    to avoid late-binding closure issues.
+
+    BUG FIX (signal_type): use `signal_type` instead of `type` for BUY/SELL
+    direction to avoid collision with the WS message type field.
+
+    BUG FIX (uncapped trades): Check total open trade count against
+    MAX_OPEN_TRADES before opening. This prevents the scanner from flooding
+    the trade store with one open position per watchlist symbol every cycle.
     """
     pro_mtf = strategy_registry.get("pro_mtf")
     if not pro_mtf:
         return
+
     for item in _watchlist.load()[:10]:
         sym = item.sym
         if not _mkt_hours.is_tradeable(sym, open_mkt):
             continue
         try:
             df   = _data.fetch(sym, "5m", "2d")
-            sigs = pro_mtf.generate(df, _ts_fn_intraday)   # direct ref, no lambda wrapper
+            sigs = pro_mtf.generate(df, _ts_fn_intraday)
             if not sigs:
                 continue
             last    = sigs[-1]
@@ -372,10 +391,9 @@ async def _scan_watchlist_signals(ws: WebSocket, open_mkt: list):
 
             t = _estimator.estimate(df, last.price, last.tp, "5m")
 
-            # BUG FIX: `signal_type` carries BUY/SELL; `type` is always "signal"
             payload = {
-                "type":            "signal",      # WS message type
-                "signal_type":     last.type,     # BUY | SELL ← was `type_` (unreliable)
+                "type":            "signal",
+                "signal_type":     last.type,
                 "symbol":          sym,
                 "time":            last.time,
                 "price":           last.price,
@@ -393,7 +411,11 @@ async def _scan_watchlist_signals(ws: WebSocket, open_mkt: list):
             if len(_signal_history) > 200:
                 _signal_history.pop()
 
-            if _trades.get_active(sym) is None:
+            # FIX 3: Only open a new trade if we are below the cap AND this
+            # symbol doesn't already have one. Without the cap, every watchlist
+            # symbol gets a trade opened simultaneously each scan cycle.
+            active_count = len(_trades.get_all_active())
+            if _trades.get_active(sym) is None and active_count < MAX_OPEN_TRADES:
                 _trades.open_trade(last, sym, "5m")
 
             await ws.send_json(payload)
@@ -429,7 +451,6 @@ def _status_payload(open_mkt: list) -> dict:
 _DIST = os.path.join(_ROOT, "frontend_dist")
 
 if os.path.isdir(_DIST):
-    # Production: serve built React app
     app.mount("/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
 
     @app.get("/")
@@ -443,7 +464,6 @@ if os.path.isdir(_DIST):
         index = os.path.join(_DIST, "index.html")
         return FileResponse(index)
 else:
-    # Development fallback message
     @app.get("/")
     def serve_dev_hint():
         return JSONResponse({

@@ -1,6 +1,11 @@
 /**
  * Sidebar — Single Responsibility: tab navigation container.
  * Each tab panel is its own component (SRP).
+ *
+ * BUG FIX: Now receives `strategy` prop and passes it to SignalTab.
+ * Previously SignalTab had no way to know the active strategy and
+ * hardcoded "pro_mtf" in its own useChartData call, so the signal
+ * panel was always wrong when any other strategy was selected.
  */
 import { useState } from "react";
 import SignalTab  from "./SignalTab";
@@ -13,7 +18,7 @@ const TABS = [
   { id: "predict", label: "🤖 Predict" },
 ];
 
-export default function Sidebar({ symbol, interval }) {
+export default function Sidebar({ symbol, interval, strategy }) {
   const [activeTab, setActiveTab] = useState("signal");
 
   return (
@@ -31,7 +36,8 @@ export default function Sidebar({ symbol, interval }) {
       </div>
 
       <div className={`sb-panel${activeTab === "signal"  ? " active" : ""}`}>
-        <SignalTab symbol={symbol} interval={interval} />
+        {/* Pass strategy down so SignalTab fetches the correct strategy's signals */}
+        <SignalTab symbol={symbol} interval={interval} strategy={strategy} />
       </div>
       <div className={`sb-panel${activeTab === "news"    ? " active" : ""}`}>
         {activeTab === "news"    && <NewsTab symbol={symbol} />}
