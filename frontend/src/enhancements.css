@@ -2,6 +2,66 @@
    Enhancement CSS additions — append to frontend/src/index.css
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ── Sidebar tab layout (Sidebar.jsx uses these classes, not the old sb-* ones) ── */
+/*
+   CRITICAL FIX: Sidebar.jsx uses .tab-bar, .tab-btn, .tab-content but these
+   were never defined in index.css (which only has the old .sb-tabs, .sb-tab,
+   .sb-panel classes). Without these, the tab-content div has no flex layout
+   so child components (SignalTab, NewsTab, etc.) cannot scroll.
+*/
+
+.tab-bar {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 6px 4px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--subtext);
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  transition: all .15s;
+  letter-spacing: .5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-btn.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+  background: var(--panel);
+}
+
+.tab-btn:hover:not(.active) {
+  color: var(--text);
+  background: rgba(255,255,255,.03);
+}
+
+/*
+   CRITICAL FIX: tab-content must be flex:1 with flex-direction:column and
+   min-height:0 so the child (SignalTab/NewsTab/PredictTab/AnalyticsTab)
+   can correctly stretch and enable overflow-y:auto scrolling.
+   Without min-height:0 on a flex child, the child expands beyond the
+   container and scrollbars never appear.
+*/
+.tab-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;        /* CRITICAL: allows flex children to shrink below content size */
+  overflow: hidden;
+}
+
+
 /* ── E4 — MTF Toggle ─────────────────────────────────────────────────────── */
 .mtf-toggle {
   display: flex;
@@ -100,7 +160,7 @@
 .m-hint em { color: var(--text); font-style: normal; }
 
 /* ── E2 — Analytics Tab ─────────────────────────────────────────────────── */
-.analytics-panel { overflow-y: auto; padding: 8px; flex: 1; }
+.analytics-panel { overflow-y: auto; padding: 8px; flex: 1; min-height: 0; }
 .analytics-header {
   display: flex;
   justify-content: space-between;
@@ -178,4 +238,45 @@
   color: var(--yellow);
   border: 1px solid rgba(255,214,0,.3);
   letter-spacing: .5px;
+}
+
+/* ── Fix: ensure sig-tab and inner panels can scroll correctly ──────────────
+   These reinforce the overflow chain: sidebar → tab-content → sig-tab → sig-panel
+   The key rule is min-height:0 at every flex level that contains a scrollable child.
+*/
+.sig-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;       /* CRITICAL: without this, flex child ignores overflow */
+  overflow: hidden;
+}
+
+.sig-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* Ensure news-panel and pred-panel also scroll correctly */
+.news-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.pred-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.analytics-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
 }

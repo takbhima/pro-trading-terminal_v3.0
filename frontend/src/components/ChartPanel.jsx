@@ -1,13 +1,28 @@
 /**
  * ChartPanel — E4: Accepts requireMtf prop and passes to useChartData.
  * Shows MTF filter indicator in toolbar when active.
+ * NEW: jumpToSignal prop scrolls the chart to a specific signal timestamp
+ * when the user clicks a signal history card in SignalTab.
  */
 import { useEffect, useRef } from "react";
 import { useChartData }      from "../hooks/useChartData";
 import { useWebSocket }      from "../context/WebSocketContext";
 import { applyTZ, applyTZtoSeries, fmt } from "../utils/utils";
 
-export default function ChartPanel({ symbol, interval, strategy, requireMtf, fetchKey = 0 }) {
+// Maps interval string → seconds per bar (used to compute visible window)
+const INTERVAL_SECONDS = {
+  "1m":  60,
+  "3m":  180,
+  "5m":  300,
+  "15m": 900,
+  "30m": 1800,
+  "1h":  3600,
+  "60m": 3600,
+  "1d":  86400,
+  "1wk": 604800,
+};
+
+export default function ChartPanel({ symbol, interval, strategy, requireMtf, fetchKey = 0, jumpToSignal }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRef    = useRef({ candle: null, ema9: null, ema21: null, ema200: null });
@@ -91,6 +106,34 @@ export default function ChartPanel({ symbol, interval, strategy, requireMtf, fet
       });
     } catch {}
   }, [lastTick, symbol.yahoo]);
+
+  // ── Jump to signal (when user clicks a signal history card) ──────────────
+  useEffect(() => {
+    if (!jumpToSignal || !chartRef.current) return;
+
+    const { time } = jumpToSignal;
+    if (!time) return;
+
+    try {
+      const ts = chartRef.current.timeScale();
+
+      // Apply the same TZ offset used for chart data so the timestamp aligns
+      const adjustedTime = applyTZ(time);
+
+      // Show ±20 bars of context around the clicked signal
+      const barSecs = INTERVAL_SECONDS[interval] || 300;
+      const halfWin = barSecs * 20;  // 20 bars either side
+
+      ts.setVisibleRange({
+        from: adjustedTime - halfWin,
+        to:   adjustedTime + halfWin,
+      });
+    } catch (err) {
+      // setVisibleRange can throw if range is outside chart data — ignore silently
+      console.warn("[ChartPanel] jumpToSignal scroll failed:", err?.message);
+    }
+  // _at ensures the effect fires even if the user clicks the same signal twice
+  }, [jumpToSignal, interval]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastClose = data?.candles?.at(-1)?.close;
   const sigCount  = data?.signals?.length || 0;
