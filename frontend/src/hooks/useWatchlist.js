@@ -1,5 +1,6 @@
 /**
- * useWatchlist — fetches and manages the watchlist.
+ * useWatchlist — FIX: adds clearAllSignals() so Watchlist can wipe
+ * all signal badges when the strategy changes.
  */
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../services/api";
@@ -33,5 +34,10 @@ export function useWatchlist() {
     setSignals(prev => ({ ...prev, [sym]: type }));
   }, []);
 
-  return { items, loading, signals, add, remove, setSignal, reload: load };
+  // FIX: reset every symbol's badge to NONE (called on strategy/interval change)
+  const clearAllSignals = useCallback(() => {
+    setSignals({});
+  }, []);
+
+  return { items, loading, signals, add, remove, setSignal, clearAllSignals, reload: load };
 }

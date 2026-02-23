@@ -1,22 +1,38 @@
 /**
- * Watchlist — Single Responsibility: display + manage watchlist items.
+ * Watchlist — FIX:
+ *  1. Clears ALL signal badges when activeStrategy prop changes.
+ *  2. Handles "signal_clear" WS messages from backend (no signal on this strategy).
+ *  3. Only accepts signal badge updates whose strategy matches activeStrategy.
  */
 import { useState, useEffect } from "react";
 import { useWebSocket } from "../context/WebSocketContext";
 import { useWatchlist }  from "../hooks/useWatchlist";
 
-export default function Watchlist({ activeSymbol, onSelect, onAdd }) {
-  const { items, loading, signals, remove, setSignal } = useWatchlist();
-  const { lastSignal } = useWebSocket();
+export default function Watchlist({ activeSymbol, onSelect, onAdd, activeStrategy }) {
+  const { items, loading, signals, remove, setSignal, clearAllSignals } = useWatchlist();
+  const { lastSignal, lastClear } = useWebSocket();
   const [filter, setFilter] = useState("");
 
-  // Update signal badge when WS signal arrives
+  // FIX-1: whenever strategy changes, wipe all stale signal badges immediately
   useEffect(() => {
-    if (lastSignal?.symbol) {
-      // BUG FIX: WS sends signal_type for the direction, type is the WS message type
-      setSignal(lastSignal.symbol, lastSignal.signal_type || lastSignal.type_);
-    }
-  }, [lastSignal, setSignal]);
+    clearAllSignals();
+  }, [activeStrategy, clearAllSignals]);
+
+  // FIX-2: update badge only if signal strategy matches the currently active strategy
+  useEffect(() => {
+    if (!lastSignal?.symbol) return;
+    const sigStrategy = lastSignal.strategy || "pro_mtf";
+    if (sigStrategy !== activeStrategy) return;  // ignore stale strategy signals
+    setSignal(lastSignal.symbol, lastSignal.signal_type || lastSignal.type_);
+  }, [lastSignal, activeStrategy, setSignal]);
+
+  // FIX-2: handle signal_clear — backend says no signal for this sym on current strategy
+  useEffect(() => {
+    if (!lastClear?.symbol) return;
+    const clearStrategy = lastClear.strategy || "pro_mtf";
+    if (clearStrategy !== activeStrategy) return;
+    setSignal(lastClear.symbol, "NONE");
+  }, [lastClear, activeStrategy, setSignal]);
 
   const filtered = items.filter(
     (w) =>

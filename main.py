@@ -1,36 +1,18 @@
 """
 Pro Trading Terminal v4 — Enhanced Edition
 ==========================================
-Enhancements over v3:
+BUG FIXES (this version):
 
-  E1 — WebSocket Multi-Client Broadcast
-       _ws_clients is now actually used: signals, ticks, and exits are
-       broadcast to ALL connected clients. Each client maintains its own
-       subscribed symbol/interval but receives watchlist scan pushes globally.
+  FIX-1 — Watchlist scan always used pro_mtf regardless of selected strategy.
+           _scan_watchlist_signals now iterates per-client metadata so each
+           connected client gets signals for their selected strategy.
 
-  E2 — Persistent SQLite Trade History
-       SqliteTradeStore replaces InMemoryTradeStore. Active trades survive
-       server restarts. Full PnL analytics available at /api/trades/analytics.
+  FIX-2 — Tick payload now includes the current strategy so frontend can
+           detect strategy mismatches and clear stale badges.
 
-  E3 — Signal Cooldown / Deduplication Window
-       SignalCooldownTracker enforces a configurable N-bar cooldown per
-       (symbol, interval) pair. Default = 5 bars. Configurable via
-       PATCH /api/settings/cooldown.
-
-  E4 — Multi-Timeframe Confirmation Toggle
-       New /api/chartdata supports ?require_mtf=1. When enabled, a signal
-       on the requested timeframe must align with the 1D trend (EMA9>EMA21).
-       Frontend toggle added in StrategyBar.
-
-  E5 — Browser Notification Permission Request
-       New /api/notify-permission endpoint signals readiness. Frontend
-       requests Notification.requestPermission() on app start via a
-       non-blocking prompt banner.
-
-  E6 — Watchlist Symbol Validation
-       POST /api/watchlist now calls SymbolValidator before accepting.
-       Returns suggested display name from yfinance longName.
-       New GET /api/validate?sym=AAPL endpoint for frontend pre-validation.
+  FIX-3 — Signal payload includes a "clear_signal" flag when a scan finds
+           no signal for a symbol on the current strategy, so the watchlist
+           badge is cleared rather than left stale.
 """
 
 import asyncio, os, json
@@ -61,7 +43,7 @@ from backend.utils.signal_cooldown     import SignalCooldownTracker
 # ── Wire up all dependencies ─────────────────────────────────────────────────
 _ROOT        = os.path.dirname(__file__)
 _data        = YFinanceDataSource()
-_trade_store = SqliteTradeStore(os.path.join(_ROOT, "trades.db"))   # E2
+_trade_store = SqliteTradeStore(os.path.join(_ROOT, "trades.db"))
 _trades      = TradeService(_trade_store)
 _watchlist   = JsonWatchlistStore(os.path.join(_ROOT, "watchlist.json"))
 _news        = MultiSourceNewsService()
@@ -69,18 +51,21 @@ _predictor   = TechnicalNewsPredictor()
 _chart       = ChartService()
 _estimator   = TargetTimeEstimator()
 _mkt_hours   = MarketHoursService()
-_cooldown    = SignalCooldownTracker(cooldown_bars=5)               # E3
+_cooldown    = SignalCooldownTracker(cooldown_bars=5)
 
 # ── WebSocket state ───────────────────────────────────────────────────────────
-_bar_tracker       = BarStateTracker()
-_signal_history:   list            = []
-_ws_clients:       list            = []   # E1: list of connected WebSocket objects
+_bar_tracker      = BarStateTracker()
+_signal_history:  list = []
+_ws_clients:      list = []   # list of connected WebSocket objects
+# FIX-1: per-client metadata — tracks symbol, interval AND strategy per client
+# keyed by id(ws) so we can look up metadata for each WebSocket object
+_ws_client_meta:  dict = {}   # id(ws) -> {"symbol": str, "interval": str, "strategy": str}
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 MAX_OPEN_TRADES = 3
 _settings = {
-    "cooldown_bars": 5,     # E3
-    "require_mtf":   False, # E4
+    "cooldown_bars": 5,
+    "require_mtf":   False,
 }
 
 app = FastAPI(title="Pro Trading Terminal v4")
@@ -108,8 +93,18 @@ async def broadcast(payload: dict, exclude: WebSocket = None) -> None:
     for d in dead:
         try:
             _ws_clients.remove(d)
+            _ws_client_meta.pop(id(d), None)
         except ValueError:
             pass
+
+
+async def send_to_client(ws: WebSocket, payload: dict) -> bool:
+    """Send payload to a single client. Returns False if the client is dead."""
+    try:
+        await ws.send_json(payload)
+        return True
+    except Exception:
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -120,9 +115,9 @@ async def broadcast(payload: dict, exclude: WebSocket = None) -> None:
 def api_status():
     open_mkt = _mkt_hours.open_markets()
     return {
-        "open_markets":   open_mkt,
-        "signals":        len(_signal_history),
-        "active_trades":  len(_trades.get_all_active()),
+        "open_markets":      open_mkt,
+        "signals":           len(_signal_history),
+        "active_trades":     len(_trades.get_all_active()),
         "connected_clients": len(_ws_clients),
     }
 
@@ -136,14 +131,12 @@ def api_get_settings():
 
 @app.patch("/api/settings/cooldown")
 def api_set_cooldown(bars: int = Query(ge=1, le=50)):
-    """E3: Update signal cooldown window at runtime."""
     _settings["cooldown_bars"] = bars
     _cooldown.set_cooldown_bars(bars)
     return {"ok": True, "cooldown_bars": bars}
 
 @app.patch("/api/settings/mtf")
 def api_set_mtf(enabled: bool):
-    """E4: Toggle multi-timeframe confirmation requirement."""
     _settings["require_mtf"] = enabled
     return {"ok": True, "require_mtf": enabled}
 
@@ -152,7 +145,6 @@ def api_set_mtf(enabled: bool):
 
 @app.get("/api/validate")
 def api_validate_symbol(sym: str):
-    """E6: Validate a ticker before adding to watchlist."""
     result = validate_symbol(sym)
     return {
         "ok":             result.ok,
@@ -171,13 +163,10 @@ def api_get_watchlist():
 
 @app.post("/api/watchlist")
 def api_add_watchlist(sym: str, name: str = ""):
-    """E6: Validate symbol before adding."""
     sym = sym.strip().upper()
     result = validate_symbol(sym)
     if not result.ok:
         return JSONResponse({"ok": False, "reason": result.reason}, status_code=400)
-
-    # Use suggested name from yfinance if none provided
     display_name = name.strip() or result.suggested_name or sym
     return _watchlist.add(sym, display_name)
 
@@ -194,33 +183,42 @@ def api_chartdata(
     symbol:      str,
     interval:    str  = "1d",
     strategy:    str  = "pro_mtf",
-    require_mtf: bool = False,   # E4: can be set per-request or via global setting
+    require_mtf: bool = False,
 ):
     try:
         strat = strategy_registry.get(strategy)
         if not strat:
             return JSONResponse({"error": f"Unknown strategy: {strategy}"}, status_code=400)
 
-        df = _data.fetch(symbol, interval)
+        df = _fetch_for_interval(symbol, interval)
         if df is None or df.empty:
             return _empty_chart(f"No data for {symbol}")
 
         chart_data = _chart.build_chart_data(df, strat, interval)
 
-        # E4 — Multi-timeframe filter
         use_mtf = require_mtf or _settings["require_mtf"]
         if use_mtf and interval not in ("1d", "1wk"):
             chart_data["signals"] = _filter_signals_by_mtf(chart_data["signals"], symbol)
             chart_data["total_signals"] = len(chart_data["signals"])
             chart_data["latest_signal"] = chart_data["signals"][-1] if chart_data["signals"] else None
 
-        # Enrich latest signal with target time
+        # Tag each signal with a stable ID (symbol + timestamp) so the frontend
+        # can uniquely identify history cards and map them to chart markers.
+        # Also tag whether a signal corresponds to the current open trade.
+        active = _trades.get_active(symbol)
+        active_entry = active["entry_price"] if active else None
+        for s in chart_data["signals"]:
+            s["signal_id"] = f"{symbol}_{s['time']}"
+            s["trade_status"] = "open" if (
+                active_entry is not None and abs(float(s["price"]) - active_entry) < 0.001
+            ) else "closed"
+
         if chart_data["latest_signal"]:
             latest = chart_data["latest_signal"]
             t = _estimator.estimate(df, float(latest["price"]), float(latest["tp"]), interval)
             latest.update({"target_time": t["label"], "target_datetime": t["datetime"], "target_bars": t["bars"]})
 
-            if _trades.get_active(symbol) is None:
+            if active is None:
                 from backend.interfaces.strategy import Signal
                 sig = Signal(**{k: latest[k] for k in Signal.__dataclass_fields__ if k in latest})
                 _trades.open_trade(sig, symbol, interval)
@@ -229,7 +227,7 @@ def api_chartdata(
             **chart_data,
             "active_trade":  _trades.get_active(symbol),
             "mtf_active":    use_mtf,
-            "strategy_used": strategy,   # echoed back so frontend can detect stale responses
+            "strategy_used": strategy,
             "interval_used": interval,
         })
     except Exception as e:
@@ -238,22 +236,16 @@ def api_chartdata(
 
 
 def _filter_signals_by_mtf(signals: list, symbol: str) -> list:
-    """
-    E4: Keep only signals that align with the daily trend.
-    BUY signals pass when EMA9 > EMA21 on daily chart.
-    SELL signals pass when EMA9 < EMA21 on daily chart.
-    Returns signals unfiltered on any error so callers never get an empty list due to a data issue.
-    """
     if not signals:
         return signals
     try:
-        from backend.indicators import EMA  # local import — avoids circular dep at module load
+        from backend.indicators import EMA
         df_daily = _data.fetch(symbol, "1d")
         if df_daily is None or df_daily.empty or len(df_daily) < 22:
-            return signals  # not enough data — skip filter
+            return signals
         e9d  = float(EMA(9).compute(df_daily).iloc[-1])
         e21d = float(EMA(21).compute(df_daily).iloc[-1])
-        if e9d != e9d or e21d != e21d:  # NaN check
+        if e9d != e9d or e21d != e21d:
             return signals
         daily_bullish = e9d > e21d
 
@@ -267,7 +259,7 @@ def _filter_signals_by_mtf(signals: list, symbol: str) -> list:
         return filtered
     except Exception as e:
         print(f"[MTF] filter failed for {symbol}: {e}")
-        return signals  # fallback: return unfiltered
+        return signals
 
 
 def _empty_chart(error: str) -> JSONResponse:
@@ -281,7 +273,7 @@ def _empty_chart(error: str) -> JSONResponse:
 @app.get("/api/news")
 def api_news(symbols: str = ""):
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols \
-               else [w.sym for w in _watchlist.load()[:8]]
+               else [w.sym for w in _watchlist.load()[:15]]  # FIX: was [:8], raised to cover larger watchlists
     articles = _news.fetch(sym_list)
     return JSONResponse({
         "news":  [_article_to_dict(a) for a in articles],
@@ -357,13 +349,10 @@ def api_all_active():
 
 @app.get("/api/trades/analytics")
 def api_trades_analytics():
-    """E2: PnL analytics from SQLite — survives restarts."""
     summary  = _trade_store.get_pnl_summary()
-    # Pass symbol=None explicitly for full history (matches ITradeStore signature)
     history  = _trade_store.get_history(symbol=None)
     by_strat: dict = {}
     for t in history:
-        # history items are TradeExit dataclass instances — access as attributes
         s = getattr(t, "strategy", None) or "unknown"
         if s not in by_strat:
             by_strat[s] = {"wins": 0, "losses": 0, "total_pnl": 0}
@@ -377,18 +366,19 @@ def api_trades_analytics():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  WebSocket — E1: true multi-client broadcast
+#  WebSocket — multi-client, strategy-aware
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     _ws_clients.append(ws)
+    ws_id = id(ws)
+    # FIX-1: store strategy alongside symbol/interval per client
+    _ws_client_meta[ws_id] = {"symbol": None, "interval": "5m", "strategy": "pro_mtf"}
 
-    open_mkt         = _mkt_hours.open_markets()
-    current_symbol   = {"sym":      None}
-    current_interval = {"interval": "5m"}
-    tick_count       = 0
+    open_mkt = _mkt_hours.open_markets()
+    tick_count = 0
 
     await ws.send_json(_status_payload(open_mkt))
 
@@ -399,12 +389,19 @@ async def ws_endpoint(ws: WebSocket):
             try:
                 msg = await asyncio.wait_for(ws.receive_json(), timeout=0.1)
                 if isinstance(msg, dict) and msg.get("type") == "subscribe":
-                    sym = msg.get("symbol", "").strip()
-                    iv  = msg.get("interval", "5m")
-                    if sym != current_symbol["sym"] or iv != current_interval["interval"]:
-                        _bar_tracker.reset(current_symbol["sym"] or "", current_interval["interval"])
-                    current_symbol["sym"]        = sym
-                    current_interval["interval"] = iv
+                    sym      = msg.get("symbol",   "").strip()
+                    iv       = msg.get("interval",  "5m")
+                    strategy = msg.get("strategy",  "pro_mtf")  # FIX-1: read strategy
+                    meta     = _ws_client_meta.get(ws_id, {})
+                    prev_sym = meta.get("symbol")
+                    prev_iv  = meta.get("interval")
+                    if sym != prev_sym or iv != prev_iv:
+                        _bar_tracker.reset(prev_sym or "", prev_iv or "5m")
+                    _ws_client_meta[ws_id] = {
+                        "symbol":   sym,
+                        "interval": iv,
+                        "strategy": strategy,
+                    }
             except asyncio.TimeoutError:
                 pass
             except Exception:
@@ -424,9 +421,10 @@ async def ws_endpoint(ws: WebSocket):
     try:
         while not disconnected["flag"]:
             tick_count += 1
-            open_mkt    = _mkt_hours.open_markets()
-            sym         = current_symbol["sym"]
-            iv          = current_interval["interval"]
+            open_mkt   = _mkt_hours.open_markets()
+            meta       = _ws_client_meta.get(ws_id, {})
+            sym        = meta.get("symbol")
+            iv         = meta.get("interval", "5m")
 
             if sym and _mkt_hours.is_tradeable(sym, open_mkt):
                 try:
@@ -440,9 +438,7 @@ async def ws_endpoint(ws: WebSocket):
 
                         exit_ev = _trades.check_exits(sym, price)
                         if exit_ev:
-                            exit_payload = _trades._exit_to_dict(exit_ev)
-                            # E1: broadcast exit to all clients
-                            await broadcast(exit_payload)
+                            await broadcast(_trades._exit_to_dict(exit_ev))
 
                         live_pnl = _trades.compute_live_pnl(sym, price)
 
@@ -471,8 +467,9 @@ async def ws_endpoint(ws: WebSocket):
             if disconnected["flag"]:
                 break
 
+            # FIX-1: scan uses per-client strategy, not global pro_mtf
             if tick_count % 12 == 0:
-                await _scan_watchlist_signals(open_mkt)  # E1: broadcast to all clients
+                await _scan_watchlist_signals_for_client(ws, open_mkt)
 
             if tick_count % 12 == 0:
                 for ev in _trades.eod_sweep(_data.get_live_price):
@@ -480,8 +477,7 @@ async def ws_endpoint(ws: WebSocket):
 
             if tick_count % 60 == 0:
                 open_mkt = _mkt_hours.open_markets()
-                status_p = _status_payload(open_mkt)
-                await broadcast(status_p)
+                await broadcast(_status_payload(open_mkt))
 
             await asyncio.sleep(5)
 
@@ -496,35 +492,68 @@ async def ws_endpoint(ws: WebSocket):
             _ws_clients.remove(ws)
         except ValueError:
             pass
+        _ws_client_meta.pop(ws_id, None)
 
 
-async def _scan_watchlist_signals(open_mkt: list):
+async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
     """
-    E1: Broadcast to all connected clients (not just the triggering ws).
-    E3: Check cooldown before sending a signal.
-    E4: Optionally filter by MTF alignment.
+    FIX-1: Scan watchlist using the strategy AND interval subscribed by THIS client.
+    Sends signals (or clear-signal notices) only to that client.
+    Scans the full watchlist (no arbitrary slice cap).
+    Soft cap at 30 symbols to keep each 5-second tick loop responsive.
+
+    FIX-TF: Uses the client's subscribed interval (1m, 3m, 5m, 15m, etc.)
+    instead of the previous hardcoded "5m". For intervals like "3m" that
+    yfinance doesn't natively support, _fetch_for_interval handles resampling.
     """
-    pro_mtf = strategy_registry.get("pro_mtf")
-    if not pro_mtf:
+    ws_id        = id(ws)
+    meta         = _ws_client_meta.get(ws_id, {})
+    strategy_key = meta.get("strategy", "pro_mtf")
+    scan_iv      = meta.get("interval",  "5m")   # FIX-TF: use client's interval
+
+    # For daily/weekly, watchlist scan signals don't make sense in a 5s tick loop
+    # — skip scanning and let the chart endpoint handle it on demand.
+    if scan_iv in ("1d", "1wk"):
         return
 
-    for item in _watchlist.load()[:10]:
+    strat = strategy_registry.get(strategy_key)
+    if not strat:
+        strat = strategy_registry.get("pro_mtf")
+        if not strat:
+            return
+
+    ts_fn = _make_ts_fn(scan_iv)  # FIX-TF: correct timestamp function for this interval
+
+    items = _watchlist.load()
+    if len(items) > 30:
+        print(f"[SCAN] Watchlist has {len(items)} items — capped at 30 for scan performance. Consider pruning.")
+        items = items[:30]
+
+    for item in items:
         sym = item.sym
         if not _mkt_hours.is_tradeable(sym, open_mkt):
             continue
         try:
-            df   = _data.fetch(sym, "5m", "2d")
-            sigs = pro_mtf.generate(df, _ts_fn_intraday)
+            df   = _fetch_for_interval(sym, scan_iv)        # FIX-TF: was _data.fetch(sym, "5m", "2d")
+            sigs = strat.generate(df, ts_fn)                # FIX-TF: was hardcoded _ts_fn_intraday
+
             if not sigs:
+                await send_to_client(ws, {
+                    "type":     "signal_clear",
+                    "symbol":   sym,
+                    "strategy": strategy_key,
+                })
                 continue
+
             last = sigs[-1]
 
-            # E3 — Cooldown check
-            if not _cooldown.is_allowed(sym, "5m", int(last.time)):
+            # Cooldown key includes interval so switching TF doesn't reuse stale cooldown
+            cooldown_iv_key = f"{scan_iv}_{strategy_key}"  # FIX-TF: was "5m_{strategy_key}"
+            if not _cooldown.is_allowed(sym, cooldown_iv_key, int(last.time)):
                 continue
-            _cooldown.record(sym, "5m", int(last.time))
+            _cooldown.record(sym, cooldown_iv_key, int(last.time))
 
-            # E4 — Optional MTF filter
+            # Optional MTF filter — applies to all intraday intervals including 1m and 3m
             if _settings["require_mtf"]:
                 filtered = _filter_signals_by_mtf(
                     [{"type": last.type, "time": last.time, "price": last.price,
@@ -534,9 +563,14 @@ async def _scan_watchlist_signals(open_mkt: list):
                     sym
                 )
                 if not filtered:
+                    await send_to_client(ws, {
+                        "type":     "signal_clear",
+                        "symbol":   sym,
+                        "strategy": strategy_key,
+                    })
                     continue
 
-            t = _estimator.estimate(df, last.price, last.tp, "5m")
+            t = _estimator.estimate(df, last.price, last.tp, scan_iv)  # FIX-TF: was "5m"
 
             payload = {
                 "type":            "signal",
@@ -549,10 +583,14 @@ async def _scan_watchlist_signals(open_mkt: list):
                 "rsi":             last.rsi,
                 "atr":             last.atr,
                 "confidence":      last.confidence,
-                "strategy":        last.strategy,
+                "strategy":        strategy_key,
+                "interval":        scan_iv,
                 "target_time":     t["label"],
                 "target_datetime": t["datetime"],
                 "target_bars":     t["bars"],
+                # Signal identity — lets frontend track open/closed per card
+                "signal_id":       f"{sym}_{last.time}",
+                "trade_status":    "open",  # live WS signals are always newly opened
             }
             _signal_history.insert(0, payload)
             if len(_signal_history) > 200:
@@ -560,16 +598,17 @@ async def _scan_watchlist_signals(open_mkt: list):
 
             active_count = len(_trades.get_all_active())
             if _trades.get_active(sym) is None and active_count < MAX_OPEN_TRADES:
-                _trades.open_trade(last, sym, "5m")
+                _trades.open_trade(last, sym, scan_iv)  # FIX-TF: was "5m"
 
-            # E1: broadcast to all connected clients
-            await broadcast(payload)
+            await send_to_client(ws, payload)
 
         except Exception as e:
-            print(f"[WS scan] {sym}: {e}")
+            print(f"[WS scan] {sym} ({scan_iv}): {e}")
 
 
 def _ts_fn_intraday(idx) -> int:
+    """Converts a pandas index value to a UTC unix timestamp (int).
+    Used for all sub-day intervals (1m, 3m, 5m, 15m, etc.)."""
     import pandas as pd
     try:
         dt = pd.Timestamp(idx)
@@ -578,6 +617,92 @@ def _ts_fn_intraday(idx) -> int:
         return int(dt.timestamp())
     except Exception:
         return 0
+
+
+def _ts_fn_daily(idx) -> str:
+    """Converts a pandas index value to a YYYY-MM-DD string.
+    Used for daily/weekly intervals."""
+    import pandas as pd
+    try:
+        dt = pd.Timestamp(idx)
+        if dt.tzinfo:
+            dt = dt.tz_convert("UTC").tz_localize(None)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return str(idx)[:10]
+
+
+# Intervals that yfinance does NOT support natively — map to a fetch interval + resample rule
+# "3m" is the only one currently: fetch 1m bars, resample to 3-minute candles.
+_RESAMPLE_MAP = {
+    "3m": ("1m", "3min"),
+}
+
+# yfinance period limits per interval (to stay within API constraints)
+_PERIOD_MAP = {
+    "1m":  "7d",    # yfinance max for 1m is 7 days
+    "2m":  "60d",
+    "3m":  "2d",    # synthesised from 1m — use 2d so chart shows intraday view (not week-long)
+    "5m":  "60d",
+    "15m": "60d",
+    "30m": "60d",
+    "60m": "730d",
+    "1h":  "730d",
+    "1d":  "2y",
+    "1wk": "10y",
+}
+
+_INTRADAY_INTERVALS = {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "90m", "1h"}
+
+
+def _make_ts_fn(interval: str):
+    """Return the correct timestamp formatter for a given interval."""
+    if interval in _INTRADAY_INTERVALS:
+        return _ts_fn_intraday
+    return _ts_fn_daily
+
+
+def _fetch_for_interval(symbol: str, interval: str):
+    """Fetch OHLCV data for any interval, including synthesised ones like 3m.
+
+    For intervals in _RESAMPLE_MAP (e.g. '3m'), we:
+      1. Fetch the source interval (e.g. '1m') at its max supported period.
+      2. Resample into the desired candle size using standard OHLCV aggregation.
+      3. Drop any incomplete (NaN) bars.
+
+    This is necessary because yfinance's valid intraday intervals are:
+      1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h — '3m' is NOT in this list.
+    """
+    import pandas as pd
+
+    if interval in _RESAMPLE_MAP:
+        src_interval, rule = _RESAMPLE_MAP[interval]
+        period = _PERIOD_MAP.get(interval, "7d")
+        df_src = _data.fetch(symbol, src_interval, period)
+        if df_src is None or df_src.empty:
+            raise ValueError(f"No {src_interval} data for {symbol} to resample to {interval}")
+
+        # Ensure DatetimeIndex for resample
+        if not isinstance(df_src.index, pd.DatetimeIndex):
+            df_src.index = pd.to_datetime(df_src.index)
+
+        df_res = df_src.resample(rule, closed="left", label="left").agg({
+            "Open":   "first",
+            "High":   "max",
+            "Low":    "min",
+            "Close":  "last",
+            "Volume": "sum",
+        }).dropna(subset=["Open", "Close"])
+
+        if len(df_res) < 10:
+            raise ValueError(f"Resampled {interval} data too sparse for {symbol}: {len(df_res)} bars")
+
+        print(f"[DATA] {symbol} resampled {src_interval}→{interval}: {len(df_res)} bars ✓")
+        return df_res
+
+    # Standard interval — use configured period
+    period = _PERIOD_MAP.get(interval, "2y")
+    return _data.fetch(symbol, interval, period)
 
 
 def _status_payload(open_mkt: list) -> dict:

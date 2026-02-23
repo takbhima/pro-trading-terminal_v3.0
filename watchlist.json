@@ -28,18 +28,6 @@
     "name": "HDFC Bank"
   },
   {
-    "sym": "AAPL",
-    "name": "Apple"
-  },
-  {
-    "sym": "MSFT",
-    "name": "Microsoft"
-  },
-  {
-    "sym": "NVDA",
-    "name": "Nvidia"
-  },
-  {
     "sym": "BTC-USD",
     "name": "Bitcoin"
   },

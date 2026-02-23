@@ -1,12 +1,9 @@
 /**
- * App.jsx — React composition root (v4)
- *
- * New in v4:
- *  E4 — mtfEnabled state lifted here so both StrategyBar and ChartPanel/useChartData
- *       can share it. StrategyBar renders the MTF toggle; useChartData passes it
- *       as a query param to /api/chartdata?require_mtf=1.
- *  E5 — NotificationBanner rendered at top level; asks for permission once.
- *       useSignalAudio hook wired here to play beep on every signal.
+ * App.jsx — FIX: strategy is now passed to WebSocket subscribe so the
+ * backend scans using the correct strategy per client.
+ * Also clears watchlist signal badges on strategy/interval/symbol change.
+ * NEW: jumpToSignal state bridges SignalTab → ChartPanel so clicking a
+ * signal history card scrolls the chart to that signal's timestamp.
  */
 import { useState, useCallback, useEffect } from "react";
 import { WebSocketProvider } from "./context/WebSocketContext";
@@ -18,66 +15,81 @@ import ChartPanel            from "./components/ChartPanel";
 import Sidebar               from "./components/Sidebar";
 import AddSymbolModal        from "./components/AddSymbolModal";
 import NotificationBanner, { useSignalAudio } from "./components/NotificationBanner";
+import { useWebSocket }      from "./context/WebSocketContext";
 
-// Inner component so hooks can access WebSocketContext
 function AppInner() {
-  const [symbol,     setSymbol]     = useState({ yahoo: "^BSESN", label: "SENSEX" });
-  const [interval,   setInterval]   = useState("1d");
-  const [strategy,   setStrategy]   = useState("pro_mtf");
-  const [mtfEnabled, setMtfEnabled] = useState(false);  // E4
-  const [modal,      setModal]      = useState(false);
-  // fetchKey forces useChartData to re-fetch even if other deps haven't changed.
-  // Incremented on every strategy/interval/symbol/mtf change to bust any caching.
-  const [fetchKey,   setFetchKey]   = useState(0);
+  const [symbol,        setSymbol]        = useState({ yahoo: "^BSESN", label: "SENSEX" });
+  const [interval,      setInterval]      = useState("1d");
+  const [strategy,      setStrategy]      = useState("pro_mtf");
+  const [mtfEnabled,    setMtfEnabled]    = useState(false);
+  const [modal,         setModal]         = useState(false);
+  const [fetchKey,      setFetchKey]      = useState(0);
+  // jumpToSignal: { time, signal_id } — set by SignalTab, consumed by ChartPanel
+  const [jumpToSignal,  setJumpToSignal]  = useState(null);
 
-  // E5: play beep on signal
+  const { subscribe } = useWebSocket();
+
   useSignalAudio();
+
+  // FIX: re-subscribe with strategy whenever any of these change
+  useEffect(() => {
+    subscribe(symbol.yahoo, interval, strategy);
+  }, [symbol.yahoo, interval, strategy, subscribe]);
 
   const handleScan = useCallback((yahoo, label) => {
     setSymbol({ yahoo, label });
     setFetchKey(k => k + 1);
+    setJumpToSignal(null);  // clear jump target on symbol change
   }, []);
 
   const handleIntervalChange = useCallback((iv) => {
     setInterval(iv);
     setFetchKey(k => k + 1);
+    setJumpToSignal(null);
   }, []);
 
   const handleStrategyChange = useCallback((strat) => {
     setStrategy(strat);
     setFetchKey(k => k + 1);
+    setJumpToSignal(null);
   }, []);
 
   const handleMtfToggle = useCallback(() => {
     const next = !mtfEnabled;
     setMtfEnabled(next);
     setFetchKey(k => k + 1);
-    // Sync to backend so watchlist scan also respects MTF setting
     fetch(`/api/settings/mtf?enabled=${next}`, { method: "PATCH" }).catch(() => {});
   }, [mtfEnabled]);
 
+  // Called by SignalTab when user clicks a signal history card
+  const handleJumpToSignal = useCallback((time, signal_id) => {
+    setJumpToSignal({ time, signal_id, _at: Date.now() });
+  }, []);
+
   return (
     <div className="app-shell">
-      {/* E5: Notification permission banner */}
       <NotificationBanner />
 
       <TopBar
         symbol={symbol}
         interval={interval}
+        strategy={strategy}
         onScan={handleScan}
         onIntervalChange={handleIntervalChange}
       />
       <StrategyBar
         activeStrategy={strategy}
         onStrategyChange={handleStrategyChange}
-        mtfEnabled={mtfEnabled}      // E4
-        onMtfToggle={handleMtfToggle} // E4
+        mtfEnabled={mtfEnabled}
+        onMtfToggle={handleMtfToggle}
       />
       <div className="main-grid">
+        {/* FIX: pass strategy so Watchlist can clear stale badges on switch */}
         <Watchlist
           activeSymbol={symbol.yahoo}
           onSelect={handleScan}
           onAdd={() => setModal(true)}
+          activeStrategy={strategy}
         />
         <ChartPanel
           symbol={symbol}
@@ -85,6 +97,7 @@ function AppInner() {
           strategy={strategy}
           requireMtf={mtfEnabled}
           fetchKey={fetchKey}
+          jumpToSignal={jumpToSignal}
         />
         <Sidebar
           symbol={symbol}
@@ -92,6 +105,7 @@ function AppInner() {
           strategy={strategy}
           requireMtf={mtfEnabled}
           fetchKey={fetchKey}
+          onJumpToSignal={handleJumpToSignal}
         />
       </div>
       {modal && (

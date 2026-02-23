@@ -1,0 +1,72 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Signal History Card — open/closed status + click-to-navigate
+   Add these rules to your existing index.css / App.css
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Status row sits above the symbol/direction row */
+.sig-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+/* OPEN badge — pulsing green dot */
+.sig-status-badge.open {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--green, #00c896);
+  background: rgba(0, 200, 150, 0.12);
+  border: 1px solid rgba(0, 200, 150, 0.3);
+  border-radius: 3px;
+  padding: 1px 5px;
+  animation: pulse-badge 2s infinite;
+}
+
+/* CLOSED badge — muted grey */
+.sig-status-badge.closed {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--muted, #6b7280);
+  background: rgba(107, 114, 128, 0.1);
+  border: 1px solid rgba(107, 114, 128, 0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+@keyframes pulse-badge {
+  0%,  100% { opacity: 1; }
+  50%        { opacity: 0.6; }
+}
+
+/* Jump-to-chart hint text */
+.sig-jump-hint {
+  font-size: 10px;
+  color: var(--accent, #4a90e2);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+}
+
+/* Make the whole card clickable when onJumpToSignal is available */
+.sig-card.clickable {
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.sig-card.clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateX(2px);
+  box-shadow: -2px 0 0 var(--accent, #4a90e2);
+}
+
+.sig-card.clickable:hover .sig-jump-hint {
+  opacity: 1;
+}
+
+.sig-card.clickable:active {
+  transform: translateX(1px);
+  opacity: 0.85;
+}
