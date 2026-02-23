@@ -193,7 +193,7 @@ function SignalHistoryCard({ sig, label, activeTrade, onJumpToSignal }) {
 
   return (
     <div
-      className={`sig-card ${isBuy ? "BUY" : "SELL"}${F ? " clickable" : ""}`}
+      className={`sig-card ${isBuy ? "BUY" : "SELL"}${onJumpToSignal ? " clickable" : ""}`}
       onClick={handleClick}
       title={onJumpToSignal ? "Click to jump to this signal on the chart" : undefined}
     >
