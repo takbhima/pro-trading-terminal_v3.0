@@ -1,3 +1,10 @@
+"""
+Strategy registry — composition root for all IStrategy implementations.
+
+Part 3 additions (appended after existing strategies):
+  - StochRSIMomentumStrategy  (key: "stoch_rsi")
+  - EMARibbonADXStrategy      (key: "ema_ribbon_adx")
+"""
 from typing import Dict, List, Optional
 from backend.interfaces import IStrategy
 from .implementations import (
@@ -7,6 +14,8 @@ from .implementations import (
     BollingerBreakoutStrategy,
     MACDCrossoverStrategy,
     SupertrendScalperStrategy,
+    StochRSIMomentumStrategy,
+    EMARibbonADXStrategy,
 )
 
 
@@ -33,10 +42,14 @@ class StrategyRegistry:
 
 registry = (
     StrategyRegistry()
+    # ── Existing strategies (order preserved) ─────────────────────────────
     .register(ProMTFStrategy())
     .register(VWAPEMAStrategy())
     .register(RSIReversalStrategy())
     .register(BollingerBreakoutStrategy())
     .register(MACDCrossoverStrategy())
     .register(SupertrendScalperStrategy())
+    # ── Part 3 additions (appended after existing) ─────────────────────────
+    .register(StochRSIMomentumStrategy())
+    .register(EMARibbonADXStrategy())
 )
