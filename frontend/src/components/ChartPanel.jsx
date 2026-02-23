@@ -1,15 +1,18 @@
 /**
  * ChartPanel — E4: Accepts requireMtf prop and passes to useChartData.
  * Shows MTF filter indicator in toolbar when active.
- * NEW: jumpToSignal prop scrolls the chart to a specific signal timestamp
- * when the user clicks a signal history card in SignalTab.
+ * NEW: jumpToSignal prop scrolls the chart to a specific signal timestamp.
+ *
+ * BUG FIX: jumpToSignal now handles both intraday (unix integer) and daily
+ * (YYYY-MM-DD string) signal timestamps. Previously, string timestamps
+ * caused NaN in arithmetic which silently failed.
  */
 import { useEffect, useRef } from "react";
 import { useChartData }      from "../hooks/useChartData";
 import { useWebSocket }      from "../context/WebSocketContext";
 import { applyTZ, applyTZtoSeries, fmt } from "../utils/utils";
 
-// Maps interval string → seconds per bar (used to compute visible window)
+// Seconds per bar for each interval (used to compute visible window around a signal)
 const INTERVAL_SECONDS = {
   "1m":  60,
   "3m":  180,
@@ -21,6 +24,21 @@ const INTERVAL_SECONDS = {
   "1d":  86400,
   "1wk": 604800,
 };
+
+/**
+ * Normalise a signal time value to a unix timestamp (seconds).
+ * Intraday signals come as integers (unix epoch).
+ * Daily/weekly signals come as "YYYY-MM-DD" strings.
+ */
+function normaliseSignalTime(time) {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") {
+    // Parse ISO date string — treat as UTC midnight
+    const ms = Date.parse(time + "T00:00:00Z");
+    return isNaN(ms) ? null : Math.floor(ms / 1000);
+  }
+  return null;
+}
 
 export default function ChartPanel({ symbol, interval, strategy, requireMtf, fetchKey = 0, jumpToSignal }) {
   const containerRef = useRef(null);
@@ -112,28 +130,33 @@ export default function ChartPanel({ symbol, interval, strategy, requireMtf, fet
     if (!jumpToSignal || !chartRef.current) return;
 
     const { time } = jumpToSignal;
-    if (!time) return;
+    if (time == null) return;
 
     try {
       const ts = chartRef.current.timeScale();
 
-      // Apply the same TZ offset used for chart data so the timestamp aligns
-      const adjustedTime = applyTZ(time);
+      // FIX: normalise to unix seconds first — handles both string (daily)
+      // and number (intraday) signal timestamps.
+      const unixTime = normaliseSignalTime(time);
+      if (!unixTime) return;
+
+      // Apply the same TZ offset used for chart rendering
+      const adjustedTime = applyTZ(unixTime);
 
       // Show ±20 bars of context around the clicked signal
       const barSecs = INTERVAL_SECONDS[interval] || 300;
-      const halfWin = barSecs * 20;  // 20 bars either side
+      const halfWin = barSecs * 20;
 
       ts.setVisibleRange({
         from: adjustedTime - halfWin,
         to:   adjustedTime + halfWin,
       });
     } catch (err) {
-      // setVisibleRange can throw if range is outside chart data — ignore silently
+      // setVisibleRange can throw if range is outside chart data — silently ignore
       console.warn("[ChartPanel] jumpToSignal scroll failed:", err?.message);
     }
-  // _at ensures the effect fires even if the user clicks the same signal twice
-  }, [jumpToSignal, interval]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // _at in jumpToSignal ensures the effect fires even when clicking the same card twice
+  }, [jumpToSignal, interval]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastClose = data?.candles?.at(-1)?.close;
   const sigCount  = data?.signals?.length || 0;
@@ -145,7 +168,6 @@ export default function ChartPanel({ symbol, interval, strategy, requireMtf, fet
         <span className="ct-sym">{symbol.label}</span>
         {lastClose && <span className="ct-px">{fmt(lastClose)}</span>}
         <span className="tz-badge">LOCAL</span>
-        {/* E4: MTF active indicator */}
         {mtfActive && (
           <span className="mtf-active-badge" title="Multi-timeframe confirmation filter is ON">
             🔒 MTF

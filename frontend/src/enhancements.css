@@ -280,3 +280,119 @@
   overflow-y: auto;
   padding: 8px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MARKET TICKER STRIP — Live SENSEX / Nifty / Bank Nifty bar
+   Sits above TopBar. Compact, dark, professional feel.
+═══════════════════════════════════════════════════════════════════════════ */
+
+.market-ticker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 32px;
+  padding: 0 16px;
+  background: #050c16;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.market-ticker.loading {
+  justify-content: center;
+}
+
+.ticker-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--green);
+  background: rgba(0, 230, 118, 0.12);
+  border: 1px solid rgba(0, 230, 118, 0.25);
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.ticker-strip {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1;
+}
+
+.ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: background 0.3s ease;
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+
+/* Flash animation when value changes */
+.ticker-item.flash-up {
+  animation: ticker-flash-up 0.6s ease;
+}
+.ticker-item.flash-down {
+  animation: ticker-flash-down 0.6s ease;
+}
+@keyframes ticker-flash-up {
+  0%   { background: rgba(0, 230, 118, 0.25); }
+  100% { background: transparent; }
+}
+@keyframes ticker-flash-down {
+  0%   { background: rgba(255, 61, 87, 0.25); }
+  100% { background: transparent; }
+}
+
+.ticker-name {
+  color: var(--dim);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.ticker-price {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.ticker-change {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* Separator dots between items */
+.ticker-item + .ticker-item::before {
+  content: "·";
+  color: var(--border);
+  margin-right: 20px;
+  font-size: 14px;
+  line-height: 1;
+  position: relative;
+  left: -20px;
+}
+
+.ticker-ts {
+  font-size: 9px;
+  color: var(--dim);
+  opacity: 0.6;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ticker-loading {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.ticker-err {
+  font-size: 10px;
+  color: var(--red);
+  opacity: 0.8;
+}

@@ -13,6 +13,14 @@ BUG FIXES (this version):
   FIX-3 — Signal payload includes a "clear_signal" flag when a scan finds
            no signal for a symbol on the current strategy, so the watchlist
            badge is cleared rather than left stale.
+
+  FIX-4 — api_chartdata: estimator.estimate() call moved BEFORE Signal creation
+           so target_bars is available when TradeService.open_trade() is called.
+           Previously target_bars was None, causing trades to always default to
+           5-bar expected duration.
+
+  NEW   — GET /api/market-ticker endpoint returns live prices for SENSEX,
+           Nifty 50, and Bank Nifty for the MarketTicker frontend component.
 """
 
 import asyncio, os, json
@@ -56,9 +64,7 @@ _cooldown    = SignalCooldownTracker(cooldown_bars=5)
 # ── WebSocket state ───────────────────────────────────────────────────────────
 _bar_tracker      = BarStateTracker()
 _signal_history:  list = []
-_ws_clients:      list = []   # list of connected WebSocket objects
-# FIX-1: per-client metadata — tracks symbol, interval AND strategy per client
-# keyed by id(ws) so we can look up metadata for each WebSocket object
+_ws_clients:      list = []
 _ws_client_meta:  dict = {}   # id(ws) -> {"symbol": str, "interval": str, "strategy": str}
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -67,6 +73,13 @@ _settings = {
     "cooldown_bars": 5,
     "require_mtf":   False,
 }
+
+# ── Market ticker symbols ─────────────────────────────────────────────────────
+_TICKER_SYMBOLS = [
+    {"symbol": "^BSESN",   "name": "SENSEX"},
+    {"symbol": "^NSEI",    "name": "Nifty 50"},
+    {"symbol": "^NSEBANK", "name": "Bank Nifty"},
+]
 
 app = FastAPI(title="Pro Trading Terminal v4")
 app.add_middleware(
@@ -81,7 +94,6 @@ app.add_middleware(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def broadcast(payload: dict, exclude: WebSocket = None) -> None:
-    """Send payload to all connected clients (optionally excluding one)."""
     dead = []
     for client in list(_ws_clients):
         if client is exclude:
@@ -99,7 +111,6 @@ async def broadcast(payload: dict, exclude: WebSocket = None) -> None:
 
 
 async def send_to_client(ws: WebSocket, payload: dict) -> bool:
-    """Send payload to a single client. Returns False if the client is dead."""
     try:
         await ws.send_json(payload)
         return True
@@ -139,6 +150,48 @@ def api_set_cooldown(bars: int = Query(ge=1, le=50)):
 def api_set_mtf(enabled: bool):
     _settings["require_mtf"] = enabled
     return {"ok": True, "require_mtf": enabled}
+
+
+# ── NEW: Market ticker endpoint ───────────────────────────────────────────────
+
+@app.get("/api/market-ticker")
+def api_market_ticker():
+    """
+    Returns live price, change, and change% for SENSEX, Nifty 50, Bank Nifty.
+    Uses yfinance fast_info — lightweight, no full history needed.
+    Called by the MarketTicker React component every 15 seconds.
+    """
+    results = []
+    for entry in _TICKER_SYMBOLS:
+        sym  = entry["symbol"]
+        name = entry["name"]
+        try:
+            price = _data.get_live_price(sym)
+            prev  = _data.get_prev_close(sym)
+            if price > 0 and prev > 0:
+                change     = round(price - prev, 2)
+                change_pct = round((change / prev) * 100, 2)
+            else:
+                change = change_pct = 0.0
+            results.append({
+                "symbol":     sym,
+                "name":       name,
+                "price":      round(price, 2),
+                "prev_close": round(prev, 2),
+                "change":     change,
+                "change_pct": change_pct,
+            })
+        except Exception as e:
+            print(f"[TICKER] {sym}: {e}")
+            results.append({
+                "symbol":     sym,
+                "name":       name,
+                "price":      0.0,
+                "prev_close": 0.0,
+                "change":     0.0,
+                "change_pct": 0.0,
+            })
+    return JSONResponse({"indices": results})
 
 
 # ── E6 — Symbol validation endpoint ──────────────────────────────────────────
@@ -202,9 +255,7 @@ def api_chartdata(
             chart_data["total_signals"] = len(chart_data["signals"])
             chart_data["latest_signal"] = chart_data["signals"][-1] if chart_data["signals"] else None
 
-        # Tag each signal with a stable ID (symbol + timestamp) so the frontend
-        # can uniquely identify history cards and map them to chart markers.
-        # Also tag whether a signal corresponds to the current open trade.
+        # Tag each signal with a stable ID and trade status
         active = _trades.get_active(symbol)
         active_entry = active["entry_price"] if active else None
         for s in chart_data["signals"]:
@@ -215,11 +266,19 @@ def api_chartdata(
 
         if chart_data["latest_signal"]:
             latest = chart_data["latest_signal"]
+
+            # FIX-4: Compute target time BEFORE building the Signal object
+            # so that target_bars is populated when open_trade() is called.
             t = _estimator.estimate(df, float(latest["price"]), float(latest["tp"]), interval)
-            latest.update({"target_time": t["label"], "target_datetime": t["datetime"], "target_bars": t["bars"]})
+            latest.update({
+                "target_time":     t["label"],
+                "target_datetime": t["datetime"],
+                "target_bars":     t["bars"],
+            })
 
             if active is None:
                 from backend.interfaces.strategy import Signal
+                # Now latest contains target_bars so Signal gets the correct value
                 sig = Signal(**{k: latest[k] for k in Signal.__dataclass_fields__ if k in latest})
                 _trades.open_trade(sig, symbol, interval)
 
@@ -273,7 +332,7 @@ def _empty_chart(error: str) -> JSONResponse:
 @app.get("/api/news")
 def api_news(symbols: str = ""):
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols \
-               else [w.sym for w in _watchlist.load()[:15]]  # FIX: was [:8], raised to cover larger watchlists
+               else [w.sym for w in _watchlist.load()[:15]]
     articles = _news.fetch(sym_list)
     return JSONResponse({
         "news":  [_article_to_dict(a) for a in articles],
@@ -374,7 +433,6 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     _ws_clients.append(ws)
     ws_id = id(ws)
-    # FIX-1: store strategy alongside symbol/interval per client
     _ws_client_meta[ws_id] = {"symbol": None, "interval": "5m", "strategy": "pro_mtf"}
 
     open_mkt = _mkt_hours.open_markets()
@@ -391,7 +449,7 @@ async def ws_endpoint(ws: WebSocket):
                 if isinstance(msg, dict) and msg.get("type") == "subscribe":
                     sym      = msg.get("symbol",   "").strip()
                     iv       = msg.get("interval",  "5m")
-                    strategy = msg.get("strategy",  "pro_mtf")  # FIX-1: read strategy
+                    strategy = msg.get("strategy",  "pro_mtf")
                     meta     = _ws_client_meta.get(ws_id, {})
                     prev_sym = meta.get("symbol")
                     prev_iv  = meta.get("interval")
@@ -467,7 +525,6 @@ async def ws_endpoint(ws: WebSocket):
             if disconnected["flag"]:
                 break
 
-            # FIX-1: scan uses per-client strategy, not global pro_mtf
             if tick_count % 12 == 0:
                 await _scan_watchlist_signals_for_client(ws, open_mkt)
 
@@ -497,22 +554,14 @@ async def ws_endpoint(ws: WebSocket):
 
 async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
     """
-    FIX-1: Scan watchlist using the strategy AND interval subscribed by THIS client.
+    Scan watchlist using the strategy AND interval subscribed by THIS client.
     Sends signals (or clear-signal notices) only to that client.
-    Scans the full watchlist (no arbitrary slice cap).
-    Soft cap at 30 symbols to keep each 5-second tick loop responsive.
-
-    FIX-TF: Uses the client's subscribed interval (1m, 3m, 5m, 15m, etc.)
-    instead of the previous hardcoded "5m". For intervals like "3m" that
-    yfinance doesn't natively support, _fetch_for_interval handles resampling.
     """
     ws_id        = id(ws)
     meta         = _ws_client_meta.get(ws_id, {})
     strategy_key = meta.get("strategy", "pro_mtf")
-    scan_iv      = meta.get("interval",  "5m")   # FIX-TF: use client's interval
+    scan_iv      = meta.get("interval",  "5m")
 
-    # For daily/weekly, watchlist scan signals don't make sense in a 5s tick loop
-    # — skip scanning and let the chart endpoint handle it on demand.
     if scan_iv in ("1d", "1wk"):
         return
 
@@ -522,11 +571,11 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
         if not strat:
             return
 
-    ts_fn = _make_ts_fn(scan_iv)  # FIX-TF: correct timestamp function for this interval
+    ts_fn = _make_ts_fn(scan_iv)
 
     items = _watchlist.load()
     if len(items) > 30:
-        print(f"[SCAN] Watchlist has {len(items)} items — capped at 30 for scan performance. Consider pruning.")
+        print(f"[SCAN] Watchlist has {len(items)} items — capped at 30 for performance.")
         items = items[:30]
 
     for item in items:
@@ -534,8 +583,8 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
         if not _mkt_hours.is_tradeable(sym, open_mkt):
             continue
         try:
-            df   = _fetch_for_interval(sym, scan_iv)        # FIX-TF: was _data.fetch(sym, "5m", "2d")
-            sigs = strat.generate(df, ts_fn)                # FIX-TF: was hardcoded _ts_fn_intraday
+            df   = _fetch_for_interval(sym, scan_iv)
+            sigs = strat.generate(df, ts_fn)
 
             if not sigs:
                 await send_to_client(ws, {
@@ -547,13 +596,11 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
 
             last = sigs[-1]
 
-            # Cooldown key includes interval so switching TF doesn't reuse stale cooldown
-            cooldown_iv_key = f"{scan_iv}_{strategy_key}"  # FIX-TF: was "5m_{strategy_key}"
+            cooldown_iv_key = f"{scan_iv}_{strategy_key}"
             if not _cooldown.is_allowed(sym, cooldown_iv_key, int(last.time)):
                 continue
             _cooldown.record(sym, cooldown_iv_key, int(last.time))
 
-            # Optional MTF filter — applies to all intraday intervals including 1m and 3m
             if _settings["require_mtf"]:
                 filtered = _filter_signals_by_mtf(
                     [{"type": last.type, "time": last.time, "price": last.price,
@@ -570,7 +617,7 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
                     })
                     continue
 
-            t = _estimator.estimate(df, last.price, last.tp, scan_iv)  # FIX-TF: was "5m"
+            t = _estimator.estimate(df, last.price, last.tp, scan_iv)
 
             payload = {
                 "type":            "signal",
@@ -588,9 +635,8 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
                 "target_time":     t["label"],
                 "target_datetime": t["datetime"],
                 "target_bars":     t["bars"],
-                # Signal identity — lets frontend track open/closed per card
                 "signal_id":       f"{sym}_{last.time}",
-                "trade_status":    "open",  # live WS signals are always newly opened
+                "trade_status":    "open",
             }
             _signal_history.insert(0, payload)
             if len(_signal_history) > 200:
@@ -598,7 +644,7 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
 
             active_count = len(_trades.get_all_active())
             if _trades.get_active(sym) is None and active_count < MAX_OPEN_TRADES:
-                _trades.open_trade(last, sym, scan_iv)  # FIX-TF: was "5m"
+                _trades.open_trade(last, sym, scan_iv)
 
             await send_to_client(ws, payload)
 
@@ -607,8 +653,6 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
 
 
 def _ts_fn_intraday(idx) -> int:
-    """Converts a pandas index value to a UTC unix timestamp (int).
-    Used for all sub-day intervals (1m, 3m, 5m, 15m, etc.)."""
     import pandas as pd
     try:
         dt = pd.Timestamp(idx)
@@ -620,8 +664,6 @@ def _ts_fn_intraday(idx) -> int:
 
 
 def _ts_fn_daily(idx) -> str:
-    """Converts a pandas index value to a YYYY-MM-DD string.
-    Used for daily/weekly intervals."""
     import pandas as pd
     try:
         dt = pd.Timestamp(idx)
@@ -632,17 +674,14 @@ def _ts_fn_daily(idx) -> str:
         return str(idx)[:10]
 
 
-# Intervals that yfinance does NOT support natively — map to a fetch interval + resample rule
-# "3m" is the only one currently: fetch 1m bars, resample to 3-minute candles.
 _RESAMPLE_MAP = {
     "3m": ("1m", "3min"),
 }
 
-# yfinance period limits per interval (to stay within API constraints)
 _PERIOD_MAP = {
-    "1m":  "7d",    # yfinance max for 1m is 7 days
+    "1m":  "7d",
     "2m":  "60d",
-    "3m":  "2d",    # synthesised from 1m — use 2d so chart shows intraday view (not week-long)
+    "3m":  "2d",
     "5m":  "60d",
     "15m": "60d",
     "30m": "60d",
@@ -656,23 +695,12 @@ _INTRADAY_INTERVALS = {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "90m", "1h"}
 
 
 def _make_ts_fn(interval: str):
-    """Return the correct timestamp formatter for a given interval."""
     if interval in _INTRADAY_INTERVALS:
         return _ts_fn_intraday
     return _ts_fn_daily
 
 
 def _fetch_for_interval(symbol: str, interval: str):
-    """Fetch OHLCV data for any interval, including synthesised ones like 3m.
-
-    For intervals in _RESAMPLE_MAP (e.g. '3m'), we:
-      1. Fetch the source interval (e.g. '1m') at its max supported period.
-      2. Resample into the desired candle size using standard OHLCV aggregation.
-      3. Drop any incomplete (NaN) bars.
-
-    This is necessary because yfinance's valid intraday intervals are:
-      1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h — '3m' is NOT in this list.
-    """
     import pandas as pd
 
     if interval in _RESAMPLE_MAP:
@@ -682,7 +710,6 @@ def _fetch_for_interval(symbol: str, interval: str):
         if df_src is None or df_src.empty:
             raise ValueError(f"No {src_interval} data for {symbol} to resample to {interval}")
 
-        # Ensure DatetimeIndex for resample
         if not isinstance(df_src.index, pd.DatetimeIndex):
             df_src.index = pd.to_datetime(df_src.index)
 
@@ -700,7 +727,6 @@ def _fetch_for_interval(symbol: str, interval: str):
         print(f"[DATA] {symbol} resampled {src_interval}→{interval}: {len(df_res)} bars ✓")
         return df_res
 
-    # Standard interval — use configured period
     period = _PERIOD_MAP.get(interval, "2y")
     return _data.fetch(symbol, interval, period)
 

@@ -38,5 +38,9 @@
   {
     "sym": "SBIN.NS",
     "name": "SBIN"
+  },
+  {
+    "sym": "IDFCFIRSTB.NS",
+    "name": "IDFC First Bank Limited"
   }
 ]
