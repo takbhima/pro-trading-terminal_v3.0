@@ -5,6 +5,9 @@
  * to confirm the ticker exists on Yahoo Finance and has a live price.
  * Also pre-fills the display name from yfinance longName when available.
  *
+ * FIX: onAdd callback is called with (yahoo, label) which triggers App.jsx
+ * to call watchlistHook.reload() for immediate list refresh — no page reload needed.
+ *
  * UX flow:
  *   1. User types ticker → blur or Enter triggers validation
  *   2. Validation status shown inline (✓ price / ✗ error)
@@ -77,7 +80,12 @@ export default function AddSymbolModal({ onClose, onAdd }) {
     setLoading(true); setError("");
     try {
       const data = await api.addWatchlist(s, n);
-      if (!data.ok) { setError(data.reason || "Already in watchlist"); return; }
+      if (!data.ok) {
+        setError(data.reason || "Already in watchlist");
+        return;
+      }
+      // FIX: Call onAdd which triggers App to reload the watchlist hook
+      // and switch the chart to the newly added symbol
       onAdd(s, n);
     } catch (e) {
       setError(e.message);

@@ -1,8 +1,16 @@
 /**
  * App.jsx — Composition root.
  * NEW: MarketTicker added above TopBar for live SENSEX / Nifty / Bank Nifty strip.
+ *
+ * FIX-1: handleJumpToSignal now accepts (time, signal_id, symbolYahoo, symbolLabel).
+ *   When a signal from a different stock is clicked in history, the active symbol
+ *   is switched first, then the chart scrolls to that signal's timestamp.
+ *   A small delay ensures the chart has loaded before the scroll is attempted.
+ *
+ * FIX-2: onAdd in AddSymbolModal now reloads the watchlist items so the new
+ *   stock appears immediately without a page refresh.
  */
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { WebSocketProvider } from "./context/WebSocketContext";
 import { TradeProvider }     from "./context/TradeContext";
 import MarketTicker          from "./components/MarketTicker";
@@ -14,6 +22,7 @@ import Sidebar               from "./components/Sidebar";
 import AddSymbolModal        from "./components/AddSymbolModal";
 import NotificationBanner, { useSignalAudio } from "./components/NotificationBanner";
 import { useWebSocket }      from "./context/WebSocketContext";
+import { useWatchlist }      from "./hooks/useWatchlist";
 
 function AppInner() {
   const [symbol,       setSymbol]       = useState({ yahoo: "^BSESN", label: "SENSEX" });
@@ -23,6 +32,9 @@ function AppInner() {
   const [modal,        setModal]        = useState(false);
   const [fetchKey,     setFetchKey]     = useState(0);
   const [jumpToSignal, setJumpToSignal] = useState(null);
+
+  // FIX-2: Lift watchlist state up so AddSymbolModal can trigger a reload
+  const watchlistHook = useWatchlist();
 
   const { subscribe } = useWebSocket();
 
@@ -57,9 +69,44 @@ function AppInner() {
     fetch(`/api/settings/mtf?enabled=${next}`, { method: "PATCH" }).catch(() => {});
   }, [mtfEnabled]);
 
-  const handleJumpToSignal = useCallback((time, signal_id) => {
-    setJumpToSignal({ time, signal_id, _at: Date.now() });
-  }, []);
+  // FIX-1: handleJumpToSignal now accepts the signal's stock symbol.
+  // If it's different from the currently active symbol, we switch the chart
+  // to that stock first, then set the scroll target.
+  // We use a pendingJumpRef to store the jump target while the chart loads.
+  const pendingJumpRef = useRef(null);
+
+  const handleJumpToSignal = useCallback((time, signal_id, signalYahoo, signalLabel) => {
+    const targetYahoo = signalYahoo || symbol.yahoo;
+    const targetLabel = signalLabel || symbol.label;
+
+    if (targetYahoo !== symbol.yahoo) {
+      // Switch to the signal's stock — store jump target to apply after load
+      pendingJumpRef.current = { time, signal_id };
+      setSymbol({ yahoo: targetYahoo, label: targetLabel });
+      setFetchKey(k => k + 1);
+      setJumpToSignal(null); // clear old jump first
+    } else {
+      // Same stock — just scroll
+      pendingJumpRef.current = null;
+      setJumpToSignal({ time, signal_id, _at: Date.now() });
+    }
+  }, [symbol.yahoo, symbol.label]);
+
+  // After a symbol switch triggered by handleJumpToSignal, apply the pending jump
+  // once the new fetchKey has caused the chart to start loading.
+  // We delay slightly to allow the chart to receive new data.
+  useEffect(() => {
+    if (!pendingJumpRef.current) return;
+    const { time, signal_id } = pendingJumpRef.current;
+    pendingJumpRef.current = null;
+
+    // Delay to let the chart data fetch complete (~1.5s is usually enough)
+    const timer = setTimeout(() => {
+      setJumpToSignal({ time, signal_id, _at: Date.now() });
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [fetchKey]); // re-run when fetchKey changes (i.e. when symbol switched)
 
   return (
     <div className="app-shell">
@@ -79,11 +126,13 @@ function AppInner() {
         onMtfToggle={handleMtfToggle}
       />
       <div className="main-grid">
+        {/* FIX-2: pass watchlistHook so Watchlist uses the shared instance */}
         <Watchlist
           activeSymbol={symbol.yahoo}
           onSelect={handleScan}
           onAdd={() => setModal(true)}
           activeStrategy={strategy}
+          watchlistHook={watchlistHook}
         />
         <ChartPanel
           symbol={symbol}
@@ -107,6 +156,8 @@ function AppInner() {
           onClose={() => setModal(false)}
           onAdd={(yahoo, label) => {
             setModal(false);
+            // FIX-2: reload the watchlist so the new item appears immediately
+            watchlistHook.reload();
             handleScan(yahoo, label);
           }}
         />

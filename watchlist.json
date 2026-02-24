@@ -54,5 +54,9 @@
   {
     "sym": "BIOCON.NS",
     "name": "BIOCON"
+  },
+  {
+    "sym": "WIPRO.NS",
+    "name": "Wipro Limited"
   }
 ]

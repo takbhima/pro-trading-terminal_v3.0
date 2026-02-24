@@ -3,13 +3,21 @@
  *  1. Clears ALL signal badges when activeStrategy prop changes.
  *  2. Handles "signal_clear" WS messages from backend (no signal on this strategy).
  *  3. Only accepts signal badge updates whose strategy matches activeStrategy.
+ *  4. FIX (new): Accepts optional `watchlistHook` prop from App.jsx so that
+ *     when the parent calls watchlistHook.reload() after adding a symbol, the
+ *     same hook instance is used and the list updates immediately without refresh.
  */
 import { useState, useEffect } from "react";
 import { useWebSocket } from "../context/WebSocketContext";
 import { useWatchlist }  from "../hooks/useWatchlist";
 
-export default function Watchlist({ activeSymbol, onSelect, onAdd, activeStrategy }) {
-  const { items, loading, signals, remove, setSignal, clearAllSignals } = useWatchlist();
+export default function Watchlist({ activeSymbol, onSelect, onAdd, activeStrategy, watchlistHook }) {
+  // FIX-2: Use the shared hook instance from App if provided, otherwise create a local one.
+  // Using a shared instance means App.reload() and Watchlist see the same state.
+  const localHook = useWatchlist();
+  const { items, loading, signals, remove, setSignal, clearAllSignals } =
+    watchlistHook || localHook;
+
   const { lastSignal, lastClear } = useWebSocket();
   const [filter, setFilter] = useState("");
 
