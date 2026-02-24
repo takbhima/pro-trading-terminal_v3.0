@@ -4,16 +4,18 @@
  * to SignalTab so clicking a signal history card scrolls the
  * main chart to that signal's timestamp.
  *
- * All other behaviour is unchanged — this is a drop-in replacement.
- * Tabs: Signal → News → Predict → Analytics
+ * RADAR TAB: Added "📡 Radar" tab between Signal and News.
+ * Shows latest signal for every watchlist stock with live WS updates.
+ * Tabs: Signal → Radar → News → Predict → Analytics
  */
 import { useState } from "react";
-import SignalTab     from "./SignalTab";
-import NewsTab       from "./NewsTab";
-import PredictTab    from "./PredictTab";
-import AnalyticsTab  from "./AnalyticsTab";
+import SignalTab           from "./SignalTab";
+import WatchlistSignalsTab from "./WatchlistSignalsTab";
+import NewsTab             from "./NewsTab";
+import PredictTab          from "./PredictTab";
+import AnalyticsTab        from "./AnalyticsTab";
 
-const TABS = ["Signal", "News", "Predict", "Analytics"];
+const TABS = ["Signal", "Radar", "News", "Predict", "Analytics"];
 
 export default function Sidebar({
   symbol,
@@ -21,7 +23,7 @@ export default function Sidebar({
   strategy,
   requireMtf,
   fetchKey,
-  onJumpToSignal,   // NEW: callback(time, signal_id) → App.jsx → ChartPanel
+  onJumpToSignal,   // callback(time, signal_id, yahoo, label) → App.jsx → ChartPanel
 }) {
   const [activeTab, setActiveTab] = useState("Signal");
 
@@ -34,10 +36,11 @@ export default function Sidebar({
             className={`tab-btn${activeTab === t ? " active" : ""}`}
             onClick={() => setActiveTab(t)}
           >
-            {t === "Signal"   && "📊 "}
-            {t === "News"     && "📰 "}
-            {t === "Predict"  && "🔮 "}
-            {t === "Analytics"&& "📈 "}
+            {t === "Signal"    && "📊 "}
+            {t === "Radar"     && "📡 "}
+            {t === "News"      && "📰 "}
+            {t === "Predict"   && "🔮 "}
+            {t === "Analytics" && "📈 "}
             {t}
           </button>
         ))}
@@ -51,7 +54,14 @@ export default function Sidebar({
             strategy={strategy}
             requireMtf={requireMtf}
             fetchKey={fetchKey}
-            onJumpToSignal={onJumpToSignal}  // NEW: pass through
+            onJumpToSignal={onJumpToSignal}
+          />
+        )}
+        {activeTab === "Radar" && (
+          <WatchlistSignalsTab
+            strategy={strategy}
+            requireMtf={requireMtf}
+            onJumpToSignal={onJumpToSignal}
           />
         )}
         {activeTab === "News" && (

@@ -1,0 +1,254 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   WatchlistSignalsTab — Radar tab styles
+   Add an import in main.jsx:  import "./components/WatchlistSignalsTab.css";
+   (or paste into enhancements.css)
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Container ──────────────────────────────────────────────────────────── */
+.radar-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Summary bar ─────────────────────────────────────────────────────────── */
+.radar-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.radar-stat {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--subtext);
+}
+
+.radar-stat.buy  { background: rgba(0,230,118,.12); color: var(--green); border: 1px solid rgba(0,230,118,.2); }
+.radar-stat.sell { background: rgba(255,61,87,.12);  color: var(--red);   border: 1px solid rgba(255,61,87,.2); }
+.radar-stat.live { background: rgba(255,214,0,.12);  color: var(--yellow);border: 1px solid rgba(255,214,0,.2); animation: radar-blink 1.5s infinite; }
+
+@keyframes radar-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+/* ── Countdown ───────────────────────────────────────────────────────────── */
+.radar-countdown {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.radar-countdown-text {
+  font-size: 9px;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.radar-refresh-btn {
+  background: none;
+  border: none;
+  color: var(--subtext);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.radar-refresh-btn:hover { color: var(--text); }
+
+/* ── Grid (vertical stack) ───────────────────────────────────────────────── */
+.radar-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.radar-empty {
+  text-align: center;
+  color: var(--subtext);
+  font-size: 11px;
+  padding: 28px 12px;
+  line-height: 2;
+}
+
+/* ── Signal card ─────────────────────────────────────────────────────────── */
+.radar-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border2);
+  border-radius: 5px;
+  padding: 7px 9px;
+  transition: background 0.15s, transform 0.1s;
+  flex-shrink: 0;
+}
+
+.radar-card.BUY  { border-left-color: var(--green); }
+.radar-card.SELL { border-left-color: var(--red); }
+
+.radar-card.clickable { cursor: pointer; }
+.radar-card.clickable:hover {
+  background: rgba(255,255,255,.04);
+  transform: translateX(2px);
+}
+.radar-card.clickable:hover .radar-jump-hint { opacity: 1; }
+
+/* Live pulse animation — 3 cycles of yellow glow then stops */
+.radar-card.live-pulse {
+  animation: radar-live-glow 0.8s ease-out 3;
+  border-left-color: var(--yellow) !important;
+}
+@keyframes radar-live-glow {
+  0%   { box-shadow: 0 0 0 0 rgba(255,214,0,0); }
+  50%  { box-shadow: 0 0 8px 2px rgba(255,214,0,0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(255,214,0,0); }
+}
+
+/* ── Card header ─────────────────────────────────────────────────────────── */
+.radar-card-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 5px;
+  flex-wrap: wrap;
+}
+
+.radar-sym {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-ticker {
+  font-size: 9px;
+  color: var(--subtext);
+  font-family: var(--font-mono);
+}
+
+.radar-live-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--yellow);
+  animation: radar-blink 1s infinite;
+  letter-spacing: 0.5px;
+}
+
+.radar-sig-type {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  font-family: var(--font-mono);
+}
+.radar-sig-type.BUY  { color: var(--green); }
+.radar-sig-type.SELL { color: var(--red); }
+
+/* ── Card body ───────────────────────────────────────────────────────────── */
+.radar-card-body { font-size: 10px; }
+.radar-card-body.muted { color: var(--dim); font-size: 10px; font-style: italic; }
+
+.radar-prices {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.radar-price-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  background: rgba(0,0,0,.2);
+  border-radius: 3px;
+  padding: 3px 4px;
+}
+
+.rp-lbl {
+  font-size: 8px;
+  color: var(--subtext);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.rp-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 1px;
+  color: var(--text);
+}
+.rp-val.entry { color: var(--yellow); }
+.rp-val.sl    { color: var(--red); }
+.rp-val.tp    { color: var(--green); }
+
+/* ── Meta row ────────────────────────────────────────────────────────────── */
+.radar-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.radar-strategy-badge {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 5px;
+  background: rgba(41,121,255,.12);
+  color: var(--blue);
+  border: 1px solid rgba(41,121,255,.2);
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+
+.radar-target-time {
+  font-size: 9px;
+  color: var(--yellow);
+  opacity: 0.85;
+}
+
+.radar-age {
+  font-size: 9px;
+  color: var(--dim);
+  margin-left: auto;
+}
+
+/* ── Jump hint ───────────────────────────────────────────────────────────── */
+.radar-jump-hint {
+  font-size: 9px;
+  color: var(--blue);
+  opacity: 0;
+  transition: opacity 0.15s;
+  margin-top: 3px;
+  text-align: right;
+}
+
+/* ── 5-tab sidebar: tighten font slightly ────────────────────────────────── */
+.sidebar .tab-btn {
+  font-size: 9.5px;
+  padding: 5px 2px;
+}
