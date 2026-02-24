@@ -9,6 +9,7 @@
  * Fetches via GET /api/chartdata (existing endpoint, no backend changes needed).
  * Uses useWatchlist() which is already lifted to App.jsx.
  */
+import "./WatchlistSignalsTab.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useWatchlist }   from "../hooks/useWatchlist";
 import { useWebSocket }   from "../context/WebSocketContext";
