@@ -1,5 +1,9 @@
 [
   {
+    "sym": "CANBK.NS",
+    "name": "CANBK.NS"
+  },
+  {
     "sym": "^BSESN",
     "name": "SENSEX"
   },
@@ -32,15 +36,23 @@
     "name": "Bitcoin"
   },
   {
-    "sym": "CANBK.NS",
-    "name": "CANBK.NS"
-  },
-  {
     "sym": "SBIN.NS",
     "name": "SBIN"
   },
   {
     "sym": "IDFCFIRSTB.NS",
     "name": "IDFC First Bank Limited"
+  },
+  {
+    "sym": "ICICIBANK.NS",
+    "name": "ICICI Bank"
+  },
+  {
+    "sym": "HINDALCO.NS",
+    "name": "Hindalco"
+  },
+  {
+    "sym": "BIOCON.NS",
+    "name": "BIOCON"
   }
 ]
