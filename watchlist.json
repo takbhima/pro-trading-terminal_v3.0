@@ -1,9 +1,5 @@
 [
   {
-    "sym": "CANBK.NS",
-    "name": "CANBK.NS"
-  },
-  {
     "sym": "^BSESN",
     "name": "SENSEX"
   },
@@ -58,5 +54,9 @@
   {
     "sym": "WIPRO.NS",
     "name": "Wipro Limited"
+  },
+  {
+    "sym": "CANBK.NS",
+    "name": "Canara Bank"
   }
 ]

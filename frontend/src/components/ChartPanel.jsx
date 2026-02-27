@@ -1,18 +1,19 @@
 /**
- * ChartPanel — E4: Accepts requireMtf prop and passes to useChartData.
- * Shows MTF filter indicator in toolbar when active.
- * NEW: jumpToSignal prop scrolls the chart to a specific signal timestamp.
+ * ChartPanel — BUG FIX: Signal markers had double timezone offset applied.
+ *   applyTZtoSeries() was called on candles/EMAs (correct), but then
+ *   applyTZ() was ALSO called on s.time inside setMarkers — double offset.
+ *   Fix: markers use the raw s.time (already an adjusted unix ts from the
+ *   server for intraday, or a YYYY-MM-DD string for daily). We apply TZ
+ *   only once via a helper that mirrors the candle data's time format.
  *
- * BUG FIX: jumpToSignal now handles both intraday (unix integer) and daily
- * (YYYY-MM-DD string) signal timestamps. Previously, string timestamps
- * caused NaN in arithmetic which silently failed.
+ * Also: jumpToSignal now handles both intraday (unix integer) and daily
+ * (YYYY-MM-DD string) signal timestamps correctly.
  */
 import { useEffect, useRef } from "react";
 import { useChartData }      from "../hooks/useChartData";
 import { useWebSocket }      from "../context/WebSocketContext";
 import { applyTZ, applyTZtoSeries, fmt } from "../utils/utils";
 
-// Seconds per bar for each interval (used to compute visible window around a signal)
 const INTERVAL_SECONDS = {
   "1m":  60,
   "3m":  180,
@@ -26,18 +27,29 @@ const INTERVAL_SECONDS = {
 };
 
 /**
- * Normalise a signal time value to a unix timestamp (seconds).
- * Intraday signals come as integers (unix epoch).
- * Daily/weekly signals come as "YYYY-MM-DD" strings.
+ * Normalise a signal time to a unix timestamp (seconds).
+ * Intraday signals → integer unix epoch.
+ * Daily/weekly signals → "YYYY-MM-DD" string → UTC midnight unix.
  */
 function normaliseSignalTime(time) {
   if (typeof time === "number") return time;
   if (typeof time === "string") {
-    // Parse ISO date string — treat as UTC midnight
     const ms = Date.parse(time + "T00:00:00Z");
     return isNaN(ms) ? null : Math.floor(ms / 1000);
   }
   return null;
+}
+
+/**
+ * Convert a signal time value to the same format used by candle data
+ * (i.e. with TZ offset applied for intraday, or raw string for daily).
+ * This avoids the double-TZ bug where applyTZ was called on a time value
+ * that was already included in applyTZtoSeries output.
+ */
+function signalTimeForMarker(time) {
+  if (typeof time === "string") return time;   // daily — LightweightCharts accepts YYYY-MM-DD
+  if (typeof time === "number") return applyTZ(time); // intraday — apply offset once
+  return time;
 }
 
 export default function ChartPanel({ symbol, interval, strategy, requireMtf, fetchKey = 0, jumpToSignal }) {
@@ -95,7 +107,9 @@ export default function ChartPanel({ symbol, interval, strategy, requireMtf, fet
           data.signals
             .filter((s) => s.time != null)
             .map((s) => ({
-              time:     applyTZ(s.time),
+              // BUG FIX: use signalTimeForMarker instead of applyTZ
+              // to avoid double timezone offset on intraday signals.
+              time:     signalTimeForMarker(s.time),
               position: s.type === "BUY" ? "belowBar" : "aboveBar",
               color:    s.type === "BUY" ? "#00e676"  : "#ff3d57",
               shape:    s.type === "BUY" ? "arrowUp"  : "arrowDown",
@@ -125,38 +139,27 @@ export default function ChartPanel({ symbol, interval, strategy, requireMtf, fet
     } catch {}
   }, [lastTick, symbol.yahoo]);
 
-  // ── Jump to signal (when user clicks a signal history card) ──────────────
+  // ── Jump to signal ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!jumpToSignal || !chartRef.current) return;
-
     const { time } = jumpToSignal;
     if (time == null) return;
 
     try {
       const ts = chartRef.current.timeScale();
-
-      // FIX: normalise to unix seconds first — handles both string (daily)
-      // and number (intraday) signal timestamps.
       const unixTime = normaliseSignalTime(time);
       if (!unixTime) return;
-
-      // Apply the same TZ offset used for chart rendering
       const adjustedTime = applyTZ(unixTime);
-
-      // Show ±20 bars of context around the clicked signal
       const barSecs = INTERVAL_SECONDS[interval] || 300;
       const halfWin = barSecs * 20;
-
       ts.setVisibleRange({
         from: adjustedTime - halfWin,
         to:   adjustedTime + halfWin,
       });
     } catch (err) {
-      // setVisibleRange can throw if range is outside chart data — silently ignore
       console.warn("[ChartPanel] jumpToSignal scroll failed:", err?.message);
     }
-  // _at in jumpToSignal ensures the effect fires even when clicking the same card twice
-  }, [jumpToSignal, interval]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [jumpToSignal, interval]);
 
   const lastClose = data?.candles?.at(-1)?.close;
   const sigCount  = data?.signals?.length || 0;

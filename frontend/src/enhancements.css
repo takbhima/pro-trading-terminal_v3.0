@@ -396,3 +396,136 @@
   color: var(--red);
   opacity: 0.8;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Watchlist spot-price styles — append to enhancements.css
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Watchlist item layout overhaul for prices ─────────────────────────── */
+
+/* Expand panel slightly to fit prices */
+.main-grid {
+  grid-template-columns: 195px 1fr 290px;
+}
+
+.wl-item {
+  padding: 5px 8px 5px 10px;
+  gap: 4px;
+}
+
+/* Left column: name + signal badge + ticker */
+.wl-left {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.wl-nm-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.wl-nm {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+/* Inline signal badge — compact */
+.wl-sig-inline {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.wl-sig-inline.BUY  {
+  color: var(--green);
+  background: rgba(0, 230, 118, 0.12);
+  border: 1px solid rgba(0, 230, 118, 0.25);
+}
+.wl-sig-inline.SELL {
+  color: var(--red);
+  background: rgba(255, 61, 87, 0.12);
+  border: 1px solid rgba(255, 61, 87, 0.25);
+}
+
+/* Right column: price block + remove button */
+.wl-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Price column — stacks price over pct */
+.wl-price-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 56px;
+}
+
+.wl-price {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wl-price.up      { color: var(--green); }
+.wl-price.dn      { color: var(--red); }
+.wl-price.loading { color: var(--dim); }
+
+.wl-pct {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+.wl-pct.up { color: var(--green); }
+.wl-pct.dn { color: var(--red); }
+
+/* Flash animations when price changes */
+@keyframes wl-flash-up {
+  0%   { background: rgba(0, 230, 118, 0.22); }
+  100% { background: transparent; }
+}
+@keyframes wl-flash-down {
+  0%   { background: rgba(255, 61, 87, 0.22); }
+  100% { background: transparent; }
+}
+.wl-flash-up   { animation: wl-flash-up   0.7s ease; }
+.wl-flash-down { animation: wl-flash-down 0.7s ease; }
+
+/* Remove button — only show on hover */
+.wl-rm {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--subtext);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: opacity 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.wl-item:hover .wl-rm { opacity: 1; }
+.wl-rm:hover { color: var(--red) !important; }
+
+/* Active item highlight */
+.wl-item.active .wl-price.up,
+.wl-item.active .wl-price.dn {
+  filter: brightness(1.15);
+}

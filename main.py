@@ -228,6 +228,47 @@ def api_add_watchlist(sym: str, name: str = ""):
 def api_del_watchlist(sym: str):
     return _watchlist.remove(sym)
 
+# ── NEW ENDPOINT: add after api_del_watchlist ─────────────────────────────────
+
+@app.get("/api/watchlist/prices")
+def api_watchlist_prices(symbols: str = ""):
+    """
+    Batch live prices for the watchlist panel.
+    Returns price, prev_close, change, change_pct per symbol.
+    Called every 15s by the Watchlist component.
+    """
+    if symbols:
+        sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    else:
+        sym_list = [w.sym for w in _watchlist.load()]
+
+    results = []
+    for sym in sym_list[:40]:
+        try:
+            price = _data.get_live_price(sym)
+            prev  = _data.get_prev_close(sym)
+            if price > 0 and prev > 0:
+                change     = round(price - prev, 4)
+                change_pct = round((change / prev) * 100, 2)
+            else:
+                change = change_pct = 0.0
+            results.append({
+                "sym":        sym,
+                "price":      round(price, 4),
+                "prev_close": round(prev, 4),
+                "change":     change,
+                "change_pct": change_pct,
+            })
+        except Exception as e:
+            print(f"[PRICES] {sym}: {e}")
+            results.append({
+                "sym":        sym,
+                "price":      0.0,
+                "prev_close": 0.0,
+                "change":     0.0,
+                "change_pct": 0.0,
+            })
+    return JSONResponse({"prices": results})
 
 # ── Chart data ────────────────────────────────────────────────────────────────
 
