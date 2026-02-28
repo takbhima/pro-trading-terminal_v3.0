@@ -36,7 +36,17 @@ import { useWatchlist }   from "../hooks/useWatchlist";
 import { useWebSocket }   from "../context/WebSocketContext";
 import { fmt }            from "../utils/utils";
 
-const REFRESH_INTERVAL_MS = 60_000; // 60 seconds
+// User-configurable refresh options (label → ms, 0 = paused)
+const REFRESH_OPTIONS = [
+  { label: "30s",    ms: 30_000  },
+  { label: "1m",     ms: 60_000  },
+  { label: "2m",     ms: 120_000 },
+  { label: "5m",     ms: 300_000 },
+  { label: "10m",    ms: 600_000 },
+  { label: "Paused", ms: 0       },
+];
+const REFRESH_STORAGE_KEY = "radarRefreshMs";
+const DEFAULT_REFRESH_MS  = 60_000;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -79,6 +89,49 @@ function Countdown({ nextRefresh, onRefresh }) {
     <span className="radar-countdown-text">
       Refresh in {secs}s
       <button className="radar-refresh-btn" onClick={onRefresh} title="Refresh now">↻</button>
+    </span>
+  );
+}
+
+// ─── Settings popover ────────────────────────────────────────────────────────
+function SettingsPopover({ refreshMs, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  // Close when clicking outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const active = REFRESH_OPTIONS.find(o => o.ms === refreshMs) || REFRESH_OPTIONS[1];
+
+  return (
+    <span className="radar-settings-wrap" ref={ref}>
+      <button
+        className="radar-settings-btn"
+        title="Refresh settings"
+        onClick={() => setOpen(v => !v)}
+      >
+        ⚙ {active.label}
+      </button>
+      {open && (
+        <div className="radar-settings-popover">
+          <div className="radar-settings-title">Auto-refresh interval</div>
+          {REFRESH_OPTIONS.map(opt => (
+            <button
+              key={opt.label}
+              className={`radar-settings-option${opt.ms === refreshMs ? " active" : ""}`}
+              onClick={() => { onChange(opt.ms); setOpen(false); }}
+            >
+              {opt.label}
+              {opt.ms === DEFAULT_REFRESH_MS && <span className="radar-settings-default">default</span>}
+            </button>
+          ))}
+        </div>
+      )}
     </span>
   );
 }
@@ -170,6 +223,20 @@ export default function WatchlistSignalsTab({
   const { items }      = useWatchlist();
   const { lastSignal } = useWebSocket();
 
+  // ── User-configurable refresh interval ───────────────────────────────────
+  const [refreshMs, setRefreshMs] = useState(() => {
+    const saved = parseInt(localStorage.getItem(REFRESH_STORAGE_KEY), 10);
+    return Number.isFinite(saved) && REFRESH_OPTIONS.some(o => o.ms === saved)
+      ? saved
+      : DEFAULT_REFRESH_MS;
+  });
+  const refreshMsRef = useRef(refreshMs);
+  const handleRefreshChange = useCallback((ms) => {
+    setRefreshMs(ms);
+    refreshMsRef.current = ms;
+    localStorage.setItem(REFRESH_STORAGE_KEY, ms);
+  }, []);
+
   // signalMap: yahoo → { symbol, signal, loading, error }
   const [signalMap,   setSignalMap]   = useState(new Map());
   const [liveYahoos,  setLiveYahoos]  = useState(new Set());
@@ -227,7 +294,7 @@ export default function WatchlistSignalsTab({
     watchlistItems.forEach(item => {
       fetchOne({ yahoo: item.sym, label: item.name || item.sym });
     });
-    setNextRefresh(Date.now() + REFRESH_INTERVAL_MS);
+    setNextRefresh(Date.now() + (refreshMsRef.current || DEFAULT_REFRESH_MS));
   }, [fetchOne]);
 
   // ── Initial load + watchlist change ──────────────────────────────────────
@@ -263,13 +330,16 @@ export default function WatchlistSignalsTab({
     if (items.length) fetchAll(items);
   }, [strategy, requireMtf, interval, items, fetchAll]);
 
-  // ── Auto-refresh timer ────────────────────────────────────────────────────
+  // ── Auto-refresh timer — respects user setting; 0 = paused ───────────────
   useEffect(() => {
+    if (!refreshMs) return; // paused
     const id = setInterval(() => {
       if (items.length) fetchAll(items);
-    }, REFRESH_INTERVAL_MS);
+    }, refreshMs);
+    // Update countdown target immediately when interval changes
+    setNextRefresh(Date.now() + refreshMs);
     return () => clearInterval(id);
-  }, [items, fetchAll]);
+  }, [items, fetchAll, refreshMs]);
 
   // ── Live WS signal → update matching card instantly ───────────────────────
   // FIX #3: filter by interval — don't mix signals from different timeframes
@@ -367,7 +437,11 @@ export default function WatchlistSignalsTab({
           {interval.toUpperCase()}
         </span>
         <div className="radar-countdown">
-          <Countdown nextRefresh={nextRefresh} onRefresh={() => fetchAll(items)} />
+          {refreshMs === 0
+            ? <span className="radar-countdown-text">⏸ Paused</span>
+            : <Countdown nextRefresh={nextRefresh} onRefresh={() => fetchAll(items)} />
+          }
+          <SettingsPopover refreshMs={refreshMs} onChange={handleRefreshChange} />
         </div>
       </div>
 

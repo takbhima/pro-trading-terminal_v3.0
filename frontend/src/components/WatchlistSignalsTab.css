@@ -252,3 +252,88 @@
   font-size: 9.5px;
   padding: 5px 2px;
 }
+/**
+ * WatchlistSignalsTab — Settings popover additions
+ * Add these rules to WatchlistSignalsTab.css
+ */
+
+/* ── Settings button ──────────────────────────────────────────────────────── */
+.radar-settings-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.radar-settings-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  color: var(--text-secondary, #aaa);
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.radar-settings-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: var(--text-primary, #ddd);
+}
+
+/* ── Popover panel ────────────────────────────────────────────────────────── */
+.radar-settings-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 120;
+  background: var(--panel-bg, #1e1e2e);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  padding: 8px 6px;
+  min-width: 145px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.radar-settings-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #888);
+  padding: 2px 8px 6px;
+  user-select: none;
+}
+
+/* ── Individual option buttons ────────────────────────────────────────────── */
+.radar-settings-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-primary, #ddd);
+  font-size: 12px;
+  padding: 5px 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.radar-settings-option:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.radar-settings-option.active {
+  background: rgba(41, 121, 255, 0.15);
+  color: var(--blue, #2979ff);
+  font-weight: 600;
+}
+
+.radar-settings-default {
+  font-size: 9px;
+  opacity: 0.5;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
