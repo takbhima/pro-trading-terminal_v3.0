@@ -5,15 +5,27 @@ import yfinance as yf
 from backend.interfaces import IDataSource
 
 _PERIOD_MAP = {
-    "1m":  "7d",
-    "2m":  "7d",
-    "5m":  "60d",
-    "15m": "60d",
-    "30m": "60d",
-    "60m": "730d",
-    "1h":  "730d",
+    "1m":  "1d",    # was "7d"  → 2016 bars; now 288 bars
+    "2m":  "5d",    # was "7d"
+    "5m":  "5d",    # was "60d" → 17,100 bars; now ~1,425 bars
+    "15m": "10d",   # was "60d"
+    "30m": "20d",   # was "60d"
+    "60m": "60d",   # was "730d"
+    "1h":  "60d",   # was "730d"
     "1d":  "2y",
     "1wk": "10y",
+}
+
+_MAX_BARS = {
+    "1m":  500,
+    "2m":  500,
+    "5m":  1000,
+    "15m": 1000,
+    "30m": 800,
+    "60m": 600,
+    "1h":  600,
+    "1d":  1000,
+    "1wk": 500,
 }
 
 
@@ -22,10 +34,10 @@ class YFinanceDataSource(IDataSource):
         resolved_period = period or _PERIOD_MAP.get(interval, "2y")
         df = self._try_ticker(symbol, interval, resolved_period)
         if df is not None and len(df) > 50:
-            return df
+            return self._cap_bars(df, interval)
         df = self._try_download(symbol, interval, resolved_period)
         if df is not None and len(df) > 50:
-            return df
+            return self._cap_bars(df, interval)
         raise ValueError(f"No data returned for {symbol} after all attempts")
 
     def get_live_price(self, symbol: str) -> float:
@@ -49,6 +61,8 @@ class YFinanceDataSource(IDataSource):
     def _try_ticker(self, symbol, interval, period):
         try:
             df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+            if df is None:  # FIX: yfinance sometimes returns None instead of raising
+                return None
             return self._clean(df, symbol, "Ticker")
         except Exception as e:
             print(f"[DATA] Ticker failed {symbol}: {e}")
@@ -81,4 +95,13 @@ class YFinanceDataSource(IDataSource):
             return None
         df = df.dropna(subset=required).copy()
         print(f"[DATA] {symbol} {source}: {len(df)} bars ✓")
+        return df
+
+    @staticmethod
+    def _cap_bars(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+        """Limit bars to prevent slow chart rendering."""
+        cap = _MAX_BARS.get(interval, 1000)
+        if len(df) > cap:
+            print(f"[DATA] Capping {len(df)} bars → {cap} for interval={interval}")
+            return df.iloc[-cap:].copy()
         return df

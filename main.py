@@ -318,10 +318,14 @@ def api_chartdata(
             })
 
             if active is None:
-                from backend.interfaces.strategy import Signal
-                # Now latest contains target_bars so Signal gets the correct value
-                sig = Signal(**{k: latest[k] for k in Signal.__dataclass_fields__ if k in latest})
-                _trades.open_trade(sig, symbol, interval)
+                try:
+                    from backend.interfaces.strategy import Signal
+                    valid_fields = set(Signal.__dataclass_fields__.keys())
+                    sig_kwargs = {k: latest[k] for k in valid_fields if k in latest}
+                    sig = Signal(**sig_kwargs)
+                    _trades.open_trade(sig, symbol, interval)
+                except Exception as e:
+                    print(f"[TRADE] Could not open trade for {symbol}: {e}")
 
         return JSONResponse({
             **chart_data,
@@ -623,6 +627,8 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
         sym = item.sym
         if not _mkt_hours.is_tradeable(sym, open_mkt):
             continue
+        if scan_iv in ("1m", "2m", "3m") and not _mkt_hours.is_tradeable(sym, open_mkt):
+            continue  # Skip ultra-short TF scans for closed markets
         try:
             df   = _fetch_for_interval(sym, scan_iv)
             sigs = strat.generate(df, ts_fn)
@@ -720,14 +726,14 @@ _RESAMPLE_MAP = {
 }
 
 _PERIOD_MAP = {
-    "1m":  "7d",
-    "2m":  "60d",
+    "1m":  "1d",
+    "2m":  "5d",
     "3m":  "2d",
-    "5m":  "60d",
-    "15m": "60d",
-    "30m": "60d",
-    "60m": "730d",
-    "1h":  "730d",
+    "5m":  "5d",     # ← FIXED
+    "15m": "10d",    # ← FIXED
+    "30m": "20d",    # ← FIXED
+    "60m": "60d",    # ← FIXED
+    "1h":  "60d",    # ← FIXED
     "1d":  "2y",
     "1wk": "10y",
 }
