@@ -1,11 +1,15 @@
 /**
  * Sidebar.jsx
- * NEW: accepts onJumpToSignal prop from App.jsx and passes it
+ * FIX: Now passes `interval` prop to WatchlistSignalsTab so Radar
+ *      shows signals for the SAME timeframe as the chart.
+ *
+ * Previously: WatchlistSignalsTab received no interval → defaulted to "1d"
+ *             which is why Radar always showed 1D signals even on 1m charts.
+ *
+ * Also accepts onJumpToSignal prop from App.jsx and passes it
  * to SignalTab so clicking a signal history card scrolls the
  * main chart to that signal's timestamp.
  *
- * RADAR TAB: Added "📡 Radar" tab between Signal and News.
- * Shows latest signal for every watchlist stock with live WS updates.
  * Tabs: Signal → Radar → News → Predict → Analytics
  */
 import { useState } from "react";
@@ -19,11 +23,11 @@ const TABS = ["Signal", "Radar", "News", "Predict", "Analytics"];
 
 export default function Sidebar({
   symbol,
-  interval,
+  interval,       // FIX: now forwarded to WatchlistSignalsTab
   strategy,
   requireMtf,
   fetchKey,
-  onJumpToSignal,   // callback(time, signal_id, yahoo, label) → App.jsx → ChartPanel
+  onJumpToSignal, // callback(time, signal_id, yahoo, label) → App.jsx → ChartPanel
 }) {
   const [activeTab, setActiveTab] = useState("Signal");
 
@@ -59,6 +63,7 @@ export default function Sidebar({
         )}
         {activeTab === "Radar" && (
           <WatchlistSignalsTab
+            interval={interval}    // FIX: was missing — Radar now tracks chart timeframe
             strategy={strategy}
             requireMtf={requireMtf}
             onJumpToSignal={onJumpToSignal}

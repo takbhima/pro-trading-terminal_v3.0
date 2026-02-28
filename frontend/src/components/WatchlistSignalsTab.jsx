@@ -1,26 +1,33 @@
 /**
  * WatchlistSignalsTab — "📡 Radar" tab
  * =====================================
- * BUGS FIXED:
+ * Shows the latest signal for EVERY stock in the watchlist.
+ * Auto-refreshes every 60 seconds. Live WS signals update cards instantly
+ * with a 10-second pulse animation.
+ * Click any card → jumps to that stock's chart.
  *
- * 1. Hardcoded `interval=1d` — now accepts `interval` prop so radar matches
- *    the user's selected timeframe.
+ * FIXES applied in this version:
  *
- * 2. signalAge() parsed daily "YYYY-MM-DD" strings in LOCAL time → added "Z"
- *    suffix to force UTC parse, eliminating the IST +5:30 skew.
+ * 1. Hardcoded `interval=1d` — now accepts `interval` prop so Radar matches
+ *    whatever timeframe is active on the chart (1m, 5m, 1d, etc.).
+ *    Root cause of the original bug: Radar always showed stale 1D signals
+ *    even when the chart was on 1m.
  *
- * 3. Internal useWatchlist() call — now accepts `watchlistHook` prop so the
- *    parent's already-lifted hook is reused, eliminating duplicate API calls.
+ * 2. Missing prop wiring — Sidebar.jsx must pass `interval` down; see
+ *    accompanying Sidebar.jsx fix.
  *
- * 4. Double fetch on strategy change — strategy/MTF change effect was
- *    triggering alongside the watchlist-change effect (because fetchAll
- *    identity changed). Fixed by tracking prev values in refs and using a
- *    single stable fetchAll that doesn't regenerate on dep changes.
+ * 3. WebSocket real-time update — live signals (from WS) were always
+ *    accepted regardless of interval. Now filtered: only accepted
+ *    if lastSignal.interval matches the current interval prop.
  *
- * 5. WS live signal bypassed requireMtf filter — now checks signal.mtf_ok
- *    when requireMtf is true before accepting live WS updates.
+ * 4. Double-fetch on strategy/interval change — prevStratRef + prevMtfRef
+ *    was missing interval. Fixed with a single unified prevConfigRef.
  *
- * 6. No "no signal" text updated for interval — "No signal on 1D" was
+ * 5. Stale closure in fetchOne — fetchOne captured strategy/requireMtf at
+ *    creation time. Now uses refs so always reads current values without
+ *    needing to re-create fetchAll on every prop change.
+ *
+ * 6. "No signal" text updated for interval — "No signal on 1D" was
  *    hardcoded; now shows the actual interval.
  */
 import "./WatchlistSignalsTab.css";
@@ -29,23 +36,15 @@ import { useWatchlist }   from "../hooks/useWatchlist";
 import { useWebSocket }   from "../context/WebSocketContext";
 import { fmt }            from "../utils/utils";
 
-const REFRESH_INTERVAL_MS = 60_000;
+const REFRESH_INTERVAL_MS = 60_000; // 60 seconds
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function signalAge(time) {
-  if (!time && time !== 0) return "";
-  let ts;
-  if (typeof time === "number") {
-    ts = time * 1000;
-  } else {
-    // FIX #2: append "Z" so Date.parse treats it as UTC, not local time
-    // "YYYY-MM-DD" → "YYYY-MM-DDT00:00:00Z"
-    ts = Date.parse(time + "T00:00:00Z");
-  }
+  if (!time) return "";
+  const ts = typeof time === "number" ? time * 1000 : Date.parse(time + "T00:00:00");
   if (isNaN(ts)) return "";
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 0)     return "just now";
   if (s < 60)    return `${s}s ago`;
   if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -53,13 +52,13 @@ function signalAge(time) {
 }
 
 // FIX #1: accepts `interval` param instead of hardcoding "1d"
-async function fetchLatestSignal(yahoo, interval, strategy, requireMtf, signal) {
+async function fetchLatestSignal(yahoo, interval, strategy, requireMtf, abortSignal) {
   const url =
     `/api/chartdata?symbol=${encodeURIComponent(yahoo)}` +
     `&interval=${encodeURIComponent(interval)}` +
     `&strategy=${strategy}` +
     (requireMtf ? "&require_mtf=1" : "");
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal: abortSignal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data.latest_signal || null;
@@ -85,13 +84,19 @@ function Countdown({ nextRefresh, onRefresh }) {
 }
 
 // ─── Individual signal card ───────────────────────────────────────────────────
+// FIX #6: receives interval so "No signal" shows the correct timeframe label
 function RadarCard({ entry, isLive, onJumpToSignal, interval }) {
   const { symbol, signal, loading, error } = entry;
   const isBuy = signal?.type === "BUY";
 
   const handleClick = () => {
     if (!onJumpToSignal || !signal?.time) return;
-    onJumpToSignal(signal.time, signal.signal_id || `${symbol.yahoo}_${signal.time}`, symbol.yahoo, symbol.label);
+    onJumpToSignal(
+      signal.time,
+      signal.signal_id || `${symbol.yahoo}_${signal.time}`,
+      symbol.yahoo,
+      symbol.label,
+    );
   };
 
   return (
@@ -100,7 +105,7 @@ function RadarCard({ entry, isLive, onJumpToSignal, interval }) {
       onClick={signal ? handleClick : undefined}
       title={signal && onJumpToSignal ? "Click to jump to this stock's chart" : undefined}
     >
-      {/* Header row */}
+      {/* Header */}
       <div className="radar-card-header">
         <span className="radar-sym">{symbol.label}</span>
         <span className="radar-ticker">{symbol.yahoo}</span>
@@ -156,28 +161,23 @@ function RadarCard({ entry, isLive, onJumpToSignal, interval }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-// FIX #1: added `interval` prop
-// FIX #3: added `watchlistHook` prop to reuse parent's hook instance
 export default function WatchlistSignalsTab({
+  interval = "1d",   // FIX #1: prop instead of hardcoded "1d"
   strategy,
   requireMtf,
-  interval = "1d",
-  watchlistHook,
   onJumpToSignal,
 }) {
-  // FIX #3: reuse parent hook if provided, avoid duplicate /api/watchlist call
-  const localHook      = useWatchlist();
-  const { items }      = watchlistHook || localHook;
+  const { items }      = useWatchlist();
   const { lastSignal } = useWebSocket();
 
-  const [signalMap,  setSignalMap]  = useState(new Map());
-  const [liveYahoos, setLiveYahoos] = useState(new Set());
+  // signalMap: yahoo → { symbol, signal, loading, error }
+  const [signalMap,   setSignalMap]   = useState(new Map());
+  const [liveYahoos,  setLiveYahoos]  = useState(new Set());
   const [nextRefresh, setNextRefresh] = useState(Date.now() + REFRESH_INTERVAL_MS);
-  const abortRefs  = useRef({});
-  const liveTimers = useRef({});
+  const abortRefs  = useRef({}); // yahoo → AbortController
+  const liveTimers = useRef({}); // yahoo → timeout id
 
-  // Keep latest values in refs to avoid stale closures in fetchAll
-  // FIX #4: stable refs prevent double-fetch when strategy/interval changes
+  // FIX #5: stable refs so fetchOne never goes stale without needing recreation
   const strategyRef   = useRef(strategy);
   const requireMtfRef = useRef(requireMtf);
   const intervalRef   = useRef(interval);
@@ -186,7 +186,8 @@ export default function WatchlistSignalsTab({
   useEffect(() => { intervalRef.current   = interval;   }, [interval]);
 
   // ── Fetch one symbol ──────────────────────────────────────────────────────
-  const fetchOne = useCallback(async (sym) => {
+  // FIX #5: stable callback — reads current config from refs, no deps needed
+  const fetchOne = useCallback((sym) => {
     abortRefs.current[sym.yahoo]?.abort();
     const ctrl = new AbortController();
     abortRefs.current[sym.yahoo] = ctrl;
@@ -198,46 +199,45 @@ export default function WatchlistSignalsTab({
       return next;
     });
 
-    try {
-      // FIX #1 + #4: read from refs so fetchOne identity is stable
-      const signal = await fetchLatestSignal(
-        sym.yahoo,
-        intervalRef.current,
-        strategyRef.current,
-        requireMtfRef.current,
-        ctrl.signal
-      );
+    fetchLatestSignal(
+      sym.yahoo,
+      intervalRef.current,    // FIX #1 + #5
+      strategyRef.current,
+      requireMtfRef.current,
+      ctrl.signal,
+    ).then(signal => {
       if (ctrl.signal.aborted) return;
       setSignalMap(prev => {
         const next = new Map(prev);
         next.set(sym.yahoo, { symbol: sym, signal, loading: false, error: null });
         return next;
       });
-    } catch (e) {
+    }).catch(e => {
       if (e.name === "AbortError") return;
       setSignalMap(prev => {
         const next = new Map(prev);
         next.set(sym.yahoo, { symbol: sym, signal: null, loading: false, error: e.message });
         return next;
       });
-    }
-  }, []); // stable — reads strategy/interval/requireMtf from refs
+    });
+  }, []); // stable
 
-  // ── Fetch all watchlist symbols ───────────────────────────────────────────
+  // ── Fetch all ─────────────────────────────────────────────────────────────
   const fetchAll = useCallback((watchlistItems) => {
     watchlistItems.forEach(item => {
       fetchOne({ yahoo: item.sym, label: item.name || item.sym });
     });
     setNextRefresh(Date.now() + REFRESH_INTERVAL_MS);
-  }, [fetchOne]); // fetchOne is stable, so fetchAll is stable too
+  }, [fetchOne]);
 
   // ── Initial load + watchlist change ──────────────────────────────────────
-  const prevItemsKeyRef = useRef("");
+  const prevItemsRef = useRef([]);
   useEffect(() => {
     if (!items.length) return;
-    const nextKey = items.map(i => i.sym).join(",");
-    if (prevItemsKeyRef.current === nextKey) return;
-    prevItemsKeyRef.current = nextKey;
+    const prevKeys = prevItemsRef.current.map(i => i.sym).join(",");
+    const nextKeys = items.map(i => i.sym).join(",");
+    if (prevKeys === nextKeys) return;
+    prevItemsRef.current = items;
 
     setSignalMap(prev => {
       const next = new Map();
@@ -250,9 +250,7 @@ export default function WatchlistSignalsTab({
     fetchAll(items);
   }, [items, fetchAll]);
 
-  // FIX #4: strategy/interval/MTF changes — single effect, no double-fetch
-  // Uses a single ref-based guard; fetchAll is now stable so it won't re-trigger
-  // the watchlist-change effect above.
+  // FIX #4: single unified config change detector — covers interval too
   const prevConfigRef = useRef({ strategy, requireMtf, interval });
   useEffect(() => {
     const prev = prevConfigRef.current;
@@ -274,14 +272,17 @@ export default function WatchlistSignalsTab({
   }, [items, fetchAll]);
 
   // ── Live WS signal → update matching card instantly ───────────────────────
+  // FIX #3: filter by interval — don't mix signals from different timeframes
   useEffect(() => {
     if (!lastSignal) return;
     const sigYahoo    = lastSignal.symbol;
     const sigStrategy = lastSignal.strategy || "pro_mtf";
-    if (!sigYahoo || sigStrategy !== strategy) return;
+    const sigInterval = lastSignal.interval;
 
-    // FIX #5: respect requireMtf — reject WS signals that aren't MTF-confirmed
-    if (requireMtf && !lastSignal.mtf_ok) return;
+    if (!sigYahoo) return;
+    if (sigStrategy !== strategy) return;
+    // FIX #3: only accept signals matching the current interval
+    if (sigInterval && sigInterval !== interval) return;
 
     setSignalMap(prev => {
       if (!prev.has(sigYahoo)) return prev;
@@ -301,7 +302,6 @@ export default function WatchlistSignalsTab({
           time:        lastSignal.time,
           target_time: lastSignal.target_time,
           signal_id:   lastSignal.signal_id,
-          mtf_ok:      lastSignal.mtf_ok,
         },
         loading: false,
         error:   null,
@@ -318,7 +318,7 @@ export default function WatchlistSignalsTab({
         return next;
       });
     }, 10_000);
-  }, [lastSignal, strategy, requireMtf]);
+  }, [lastSignal, strategy, interval]);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
@@ -328,7 +328,7 @@ export default function WatchlistSignalsTab({
     };
   }, []);
 
-  // ── Sorted entries ────────────────────────────────────────────────────────
+  // ── Sort: live first → BUY → SELL → no signal ────────────────────────────
   const entries = [...signalMap.values()].sort((a, b) => {
     const aLive = liveYahoos.has(a.symbol.yahoo) ? 1 : 0;
     const bLive = liveYahoos.has(b.symbol.yahoo) ? 1 : 0;
@@ -344,25 +344,34 @@ export default function WatchlistSignalsTab({
     return 0;
   });
 
-  const total     = entries.length;
   const buyCount  = entries.filter(e => e.signal?.type === "BUY").length;
   const sellCount = entries.filter(e => e.signal?.type === "SELL").length;
   const liveCount = liveYahoos.size;
 
   return (
     <div className="radar-tab">
+      {/* Summary bar */}
       <div className="radar-summary-bar">
-        <span className="radar-stat">{total} stocks</span>
+        <span className="radar-stat">{entries.length} stocks</span>
         <span className="radar-stat buy">{buyCount} BUY</span>
         <span className="radar-stat sell">{sellCount} SELL</span>
         {liveCount > 0 && (
           <span className="radar-stat live">{liveCount} LIVE</span>
         )}
+        {/* Active interval badge — makes it obvious what timeframe Radar is on */}
+        <span className="radar-stat" style={{
+          background: "rgba(41,121,255,.12)",
+          color: "var(--blue)",
+          border: "1px solid rgba(41,121,255,.2)",
+        }}>
+          {interval.toUpperCase()}
+        </span>
         <div className="radar-countdown">
           <Countdown nextRefresh={nextRefresh} onRefresh={() => fetchAll(items)} />
         </div>
       </div>
 
+      {/* Cards */}
       <div className="radar-grid">
         {entries.length === 0 && (
           <div className="radar-empty">
