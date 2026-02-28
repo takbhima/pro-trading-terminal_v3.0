@@ -240,7 +240,7 @@ export default function WatchlistSignalsTab({
   // signalMap: yahoo → { symbol, signal, loading, error }
   const [signalMap,   setSignalMap]   = useState(new Map());
   const [liveYahoos,  setLiveYahoos]  = useState(new Set());
-  const [nextRefresh, setNextRefresh] = useState(Date.now() + REFRESH_INTERVAL_MS);
+  const [nextRefresh, setNextRefresh] = useState(Date.now() + DEFAULT_REFRESH_MS);
   const abortRefs  = useRef({}); // yahoo → AbortController
   const liveTimers = useRef({}); // yahoo → timeout id
 
