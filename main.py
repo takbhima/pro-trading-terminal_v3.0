@@ -287,6 +287,8 @@ def api_chartdata(
         df = _fetch_for_interval(symbol, interval)
         if df is None or df.empty:
             return _empty_chart(f"No data for {symbol}")
+        if len(df) < 10:
+            print(f"[CHART] {symbol} {interval}: sparse data ({len(df)} bars) — signals may be limited")
 
         chart_data = _chart.build_chart_data(df, strat, interval)
 
@@ -696,7 +698,11 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
             await send_to_client(ws, payload)
 
         except Exception as e:
-            print(f"[WS scan] {sym} ({scan_iv}): {e}")
+            err_msg = str(e)
+            if "No data returned" in err_msg:
+                pass  # sparse 1m NSE data — skip silently
+            else:
+                print(f"[WS scan] {sym} ({scan_iv}): {err_msg}")
 
 
 def _ts_fn_intraday(idx) -> int:
@@ -768,7 +774,7 @@ def _fetch_for_interval(symbol: str, interval: str):
             "Volume": "sum",
         }).dropna(subset=["Open", "Close"])
 
-        if len(df_res) < 10:
+        if len(df_res) < 3:
             raise ValueError(f"Resampled {interval} data too sparse for {symbol}: {len(df_res)} bars")
 
         print(f"[DATA] {symbol} resampled {src_interval}→{interval}: {len(df_res)} bars ✓")

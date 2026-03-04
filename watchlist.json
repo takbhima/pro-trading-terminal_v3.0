@@ -62,5 +62,9 @@
   {
     "sym": "^IXIC",
     "name": "NASDAQ Composite"
+  },
+  {
+    "sym": "TATASTEEL.NS",
+    "name": "Tata Steel Limited"
   }
 ]
