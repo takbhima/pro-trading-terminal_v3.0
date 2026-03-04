@@ -33,8 +33,18 @@ BUG FIXES (this version):
             active trade being checked as part of the total.
 
   FIX-8  — _fetch_for_interval "3m" resampled from "1m" used wrong period key
-            "3m" → "2d" but 1m data only has 1d by default; changed to "5d"
-            so there is enough source data to resample.
+            "3m" → "2d" but 1m data only has 1d by default; changed to "7d"
+            so there is enough source data to resample even with bar capping.
+
+  FIX-A  — WS default interval changed from "5m" to None so the watchlist scan
+            cannot fire with a stale interval before the client sends subscribe.
+            Fixes the "Scalping · 5m" label mismatch when 3m chart is selected.
+
+  FIX-B  — _scan_watchlist_signals_for_client now guards against None interval
+            (unsubscribed client) instead of only guarding 1d/1wk.
+
+  FIX-F  — Bar tracker tick loop uses "5m" as safe fallback only for the live
+            tick bar — the scan still refuses to run until interval is set.
 
   FIX-9  — api_chartdata signal tagging: trade_status comparison used float
             tolerance of 0.001 which is too tight for high-price assets like
@@ -508,7 +518,10 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     _ws_clients.append(ws)
     ws_id = id(ws)
-    _ws_client_meta[ws_id] = {"symbol": None, "interval": "5m", "strategy": "pro_mtf"}
+    # FIX-A: Default interval to None so the scan waits for an explicit subscribe
+    # before running. A hardcoded "5m" could cause the wrong interval to fire
+    # if the first watchlist scan happened before the client sent its subscribe msg.
+    _ws_client_meta[ws_id] = {"symbol": None, "interval": None, "strategy": "pro_mtf"}
 
     open_mkt = _mkt_hours.open_markets()
     tick_count = 0
@@ -529,7 +542,8 @@ async def ws_endpoint(ws: WebSocket):
                     prev_sym = meta.get("symbol")
                     prev_iv  = meta.get("interval")
                     if sym != prev_sym or iv != prev_iv:
-                        _bar_tracker.reset(prev_sym or "", prev_iv or "5m")
+                        # FIX-C: use prev_iv if set, otherwise skip reset (was None)
+                        _bar_tracker.reset(prev_sym or "", prev_iv or iv or "5m")
                     _ws_client_meta[ws_id] = {
                         "symbol":   sym,
                         "interval": iv,
@@ -557,7 +571,7 @@ async def ws_endpoint(ws: WebSocket):
             open_mkt   = _mkt_hours.open_markets()
             meta       = _ws_client_meta.get(ws_id, {})
             sym        = meta.get("symbol")
-            iv         = meta.get("interval", "5m")
+            iv         = meta.get("interval") or "5m"  # FIX-F: safe fallback for bar tracker
 
             if sym and _mkt_hours.is_tradeable(sym, open_mkt):
                 try:
@@ -640,9 +654,11 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
     ws_id        = id(ws)
     meta         = _ws_client_meta.get(ws_id, {})
     strategy_key = meta.get("strategy", "pro_mtf")
-    scan_iv      = meta.get("interval",  "5m")
+    scan_iv      = meta.get("interval") or None  # FIX-E: None means "not subscribed yet"
 
-    if scan_iv in ("1d", "1wk"):
+    # FIX-B: Don't scan if interval is None (client hasn't subscribed yet)
+    # or if it's a daily/weekly chart (no meaningful intraday signals)
+    if not scan_iv or scan_iv in ("1d", "1wk"):
         return
 
     strat = strategy_registry.get(strategy_key)
@@ -768,8 +784,9 @@ _RESAMPLE_MAP = {
 _PERIOD_MAP = {
     "1m":  "1d",
     "2m":  "5d",
-    # FIX-8: "3m" resamples from 1m; use "5d" to ensure enough 1m source bars
-    "3m":  "5d",
+    # FIX-8+D: "3m" resamples from 1m; use "7d" so even after backend bar-capping
+    # (500 bars) there are enough 1m bars to produce meaningful 3m candles.
+    "3m":  "7d",
     "5m":  "5d",
     "15m": "10d",
     "30m": "20d",
