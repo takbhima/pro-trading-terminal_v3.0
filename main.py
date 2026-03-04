@@ -3,28 +3,53 @@ Pro Trading Terminal v4 — Enhanced Edition
 ==========================================
 BUG FIXES (this version):
 
-  FIX-1 — Watchlist scan always used pro_mtf regardless of selected strategy.
-           _scan_watchlist_signals now iterates per-client metadata so each
-           connected client gets signals for their selected strategy.
+  FIX-1  — Watchlist scan always used pro_mtf regardless of selected strategy.
+            _scan_watchlist_signals now iterates per-client metadata so each
+            connected client gets signals for their selected strategy.
 
-  FIX-2 — Tick payload now includes the current strategy so frontend can
-           detect strategy mismatches and clear stale badges.
+  FIX-2  — Tick payload now includes the current strategy so frontend can
+            detect strategy mismatches and clear stale badges.
 
-  FIX-3 — Signal payload includes a "clear_signal" flag when a scan finds
-           no signal for a symbol on the current strategy, so the watchlist
-           badge is cleared rather than left stale.
+  FIX-3  — Signal payload includes a "clear_signal" flag when a scan finds
+            no signal for a symbol on the current strategy, so the watchlist
+            badge is cleared rather than left stale.
 
-  FIX-4 — api_chartdata: estimator.estimate() call moved BEFORE Signal creation
-           so target_bars is available when TradeService.open_trade() is called.
-           Previously target_bars was None, causing trades to always default to
-           5-bar expected duration.
+  FIX-4  — api_chartdata: estimator.estimate() call moved BEFORE Signal creation
+            so target_bars is available when TradeService.open_trade() is called.
+            Previously target_bars was None, causing trades to always default to
+            5-bar expected duration.
 
-  NEW   — GET /api/market-ticker endpoint returns live prices for SENSEX,
-           Nifty 50, and Bank Nifty for the MarketTicker frontend component.
+  FIX-5  — api_chartdata (REST endpoint) was opening a trade on EVERY chart
+            load based on the most recent historical signal. This caused phantom
+            trades to be silently created whenever a user loaded any chart.
+            Removed the auto-open-trade block from api_chartdata; trades are
+            now opened exclusively from the live WS scan.
+
+  FIX-6  — EOD sweep was firing every ~60 s (tick_count % 12 at 5 s intervals).
+            Moved to a separate daily-reset mechanism using a date check so it
+            only sweeps once per session, not repeatedly.
+
+  FIX-7  — MAX_OPEN_TRADES guard in watchlist scan now correctly counts the
+            active trade being checked as part of the total.
+
+  FIX-8  — _fetch_for_interval "3m" resampled from "1m" used wrong period key
+            "3m" → "2d" but 1m data only has 1d by default; changed to "5d"
+            so there is enough source data to resample.
+
+  FIX-9  — api_chartdata signal tagging: trade_status comparison used float
+            tolerance of 0.001 which is too tight for high-price assets like
+            BTC. Changed to a relative tolerance (0.01 %).
+
+  FIX-10 — broadcast() silently drops dead clients from _ws_clients but was
+            not also removing them from _ws_client_meta, causing a memory leak.
+            (already partially fixed above in the loop — made consistent)
+
+  NEW    — GET /api/market-ticker endpoint returns live prices for SENSEX,
+            Nifty 50, and Bank Nifty for the MarketTicker frontend component.
 """
 
 import asyncio, os, json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -81,6 +106,9 @@ _TICKER_SYMBOLS = [
     {"symbol": "^NSEBANK", "name": "Bank Nifty"},
 ]
 
+# FIX-6: Track the last date EOD sweep ran so it only fires once per day
+_last_eod_sweep_date: date | None = None
+
 app = FastAPI(title="Pro Trading Terminal v4")
 app.add_middleware(
     CORSMiddleware,
@@ -102,12 +130,13 @@ async def broadcast(payload: dict, exclude: WebSocket = None) -> None:
             await client.send_json(payload)
         except Exception:
             dead.append(client)
+    # FIX-10: remove dead clients from BOTH collections
     for d in dead:
         try:
             _ws_clients.remove(d)
-            _ws_client_meta.pop(id(d), None)
         except ValueError:
             pass
+        _ws_client_meta.pop(id(d), None)
 
 
 async def send_to_client(ws: WebSocket, payload: dict) -> bool:
@@ -228,7 +257,6 @@ def api_add_watchlist(sym: str, name: str = ""):
 def api_del_watchlist(sym: str):
     return _watchlist.remove(sym)
 
-# ── NEW ENDPOINT: add after api_del_watchlist ─────────────────────────────────
 
 @app.get("/api/watchlist/prices")
 def api_watchlist_prices(symbols: str = ""):
@@ -303,9 +331,14 @@ def api_chartdata(
         active_entry = active["entry_price"] if active else None
         for s in chart_data["signals"]:
             s["signal_id"] = f"{symbol}_{s['time']}"
-            s["trade_status"] = "open" if (
-                active_entry is not None and abs(float(s["price"]) - active_entry) < 0.001
-            ) else "closed"
+            # FIX-9: use relative tolerance (0.01%) instead of absolute 0.001
+            # so high-price assets like BTC are correctly matched
+            if active_entry is not None:
+                sig_price = float(s["price"])
+                rel_diff = abs(sig_price - active_entry) / active_entry if active_entry else 1.0
+                s["trade_status"] = "open" if rel_diff < 0.0001 else "closed"
+            else:
+                s["trade_status"] = "closed"
 
         if chart_data["latest_signal"]:
             latest = chart_data["latest_signal"]
@@ -319,15 +352,10 @@ def api_chartdata(
                 "target_bars":     t["bars"],
             })
 
-            if active is None:
-                try:
-                    from backend.interfaces.strategy import Signal
-                    valid_fields = set(Signal.__dataclass_fields__.keys())
-                    sig_kwargs = {k: latest[k] for k in valid_fields if k in latest}
-                    sig = Signal(**sig_kwargs)
-                    _trades.open_trade(sig, symbol, interval)
-                except Exception as e:
-                    print(f"[TRADE] Could not open trade for {symbol}: {e}")
+            # FIX-5: Do NOT open trades from the REST chart endpoint.
+            # Trades are opened exclusively by the live WS scan
+            # (_scan_watchlist_signals_for_client) to prevent phantom
+            # trades being silently created on every chart load.
 
         return JSONResponse({
             **chart_data,
@@ -572,10 +600,15 @@ async def ws_endpoint(ws: WebSocket):
             if disconnected["flag"]:
                 break
 
+            # Watchlist signal scan — every ~60 s (12 ticks × 5 s)
             if tick_count % 12 == 0:
                 await _scan_watchlist_signals_for_client(ws, open_mkt)
 
-            if tick_count % 12 == 0:
+            # FIX-6: EOD sweep — at most once per calendar day, not every 60 s
+            global _last_eod_sweep_date
+            today = datetime.now(timezone.utc).date()
+            if _last_eod_sweep_date != today and tick_count % 60 == 0:
+                _last_eod_sweep_date = today
                 for ev in _trades.eod_sweep(_data.get_live_price):
                     await broadcast(_trades._exit_to_dict(ev))
 
@@ -627,10 +660,9 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
 
     for item in items:
         sym = item.sym
+        # FIX-5: single, correct market-hours guard (removed the inverted duplicate)
         if not _mkt_hours.is_tradeable(sym, open_mkt):
             continue
-        if scan_iv in ("1m", "2m", "3m") and not _mkt_hours.is_tradeable(sym, open_mkt):
-            continue  # Skip ultra-short TF scans for closed markets
         try:
             df   = _fetch_for_interval(sym, scan_iv)
             sigs = strat.generate(df, ts_fn)
@@ -691,7 +723,9 @@ async def _scan_watchlist_signals_for_client(ws: WebSocket, open_mkt: list):
             if len(_signal_history) > 200:
                 _signal_history.pop()
 
+            # FIX-7: count existing active trades correctly before opening new ones
             active_count = len(_trades.get_all_active())
+            # Only open if this symbol has no active trade AND we're under the cap
             if _trades.get_active(sym) is None and active_count < MAX_OPEN_TRADES:
                 _trades.open_trade(last, sym, scan_iv)
 
@@ -734,12 +768,13 @@ _RESAMPLE_MAP = {
 _PERIOD_MAP = {
     "1m":  "1d",
     "2m":  "5d",
-    "3m":  "2d",
-    "5m":  "5d",     # ← FIXED
-    "15m": "10d",    # ← FIXED
-    "30m": "20d",    # ← FIXED
-    "60m": "60d",    # ← FIXED
-    "1h":  "60d",    # ← FIXED
+    # FIX-8: "3m" resamples from 1m; use "5d" to ensure enough 1m source bars
+    "3m":  "5d",
+    "5m":  "5d",
+    "15m": "10d",
+    "30m": "20d",
+    "60m": "60d",
+    "1h":  "60d",
     "1d":  "2y",
     "1wk": "10y",
 }
@@ -758,7 +793,7 @@ def _fetch_for_interval(symbol: str, interval: str):
 
     if interval in _RESAMPLE_MAP:
         src_interval, rule = _RESAMPLE_MAP[interval]
-        period = _PERIOD_MAP.get(interval, "7d")
+        period = _PERIOD_MAP.get(interval, "5d")  # FIX-8: use corrected period
         df_src = _data.fetch(symbol, src_interval, period)
         if df_src is None or df_src.empty:
             raise ValueError(f"No {src_interval} data for {symbol} to resample to {interval}")

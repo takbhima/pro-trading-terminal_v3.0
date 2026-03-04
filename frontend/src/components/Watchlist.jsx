@@ -8,7 +8,13 @@
  * BUG FIX 2: clearAllSignals in useEffect dep array caused potential
  *   stale closure issues. Stabilized via useRef pattern.
  *
- * NEW: Displays live spot price and % change for each watchlist item.
+ * BUG FIX 3: Dead `useWatchlistPrices` hook was defined but never called.
+ *   It also had a broken `return prices, flashing` statement — the comma
+ *   operator discards `prices` and returns only `flashing`, causing prices
+ *   to always be undefined. Removed the dead hook entirely; price fetching
+ *   is handled inline below (the working implementation).
+ *
+ * FEATURE: Displays live spot price and % change for each watchlist item.
  *   Polls GET /api/watchlist/prices every 15 seconds.
  *   Color-coded green/red with flash animation on price change.
  */
@@ -17,58 +23,6 @@ import { useWebSocket } from "../context/WebSocketContext";
 import { useWatchlist }  from "../hooks/useWatchlist";
 
 const PRICE_REFRESH_MS = 15_000;
-
-// Small hook to manage watchlist prices
-function useWatchlistPrices(items) {
-  const [prices, setPrices] = useState({});  // sym → { price, change_pct, up }
-  const [flashing, setFlashing] = useState({}); // sym → "up" | "down" | null
-  const prevPricesRef = useRef({});
-  const timerRef = useRef(null);
-
-  const fetchPrices = useCallback(async () => {
-    if (!items.length) return;
-    try {
-      const syms = items.map(i => i.sym).join(",");
-      const res  = await fetch(`/api/watchlist/prices?symbols=${encodeURIComponent(syms)}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const newPrices = {};
-      const newFlash  = {};
-
-      for (const entry of (data.prices || [])) {
-        newPrices[entry.sym] = {
-          price:      entry.price,
-          change_pct: entry.change_pct,
-          up:         entry.change_pct >= 0,
-        };
-        // Detect price change for flash animation
-        const prev = prevPricesRef.current[entry.sym];
-        if (prev && prev.price !== entry.price) {
-          newFlash[entry.sym] = entry.price > prev.price ? "up" : "down";
-        }
-      }
-
-      prevPricesRef.current = newPrices;
-      setPrices(newPrices);
-
-      // Apply flash then clear after 700ms
-      if (Object.keys(newFlash).length) {
-        setFlashing(newFlash);
-        setTimeout(() => setFlashing({}), 700);
-      }
-    } catch {
-      // silent — prices are non-critical
-    }
-  }, [items]);
-
-  useEffect(() => {
-    fetchPrices();
-    timerRef.current = setInterval(fetchPrices, PRICE_REFRESH_MS);
-    return () => clearInterval(timerRef.current);
-  }, [fetchPrices]);
-
-  return prices, flashing;
-}
 
 export default function Watchlist({ activeSymbol, onSelect, onAdd, activeStrategy, watchlistHook }) {
   // BUG FIX 1: Only instantiate local hook if no external hook provided
@@ -83,7 +37,7 @@ export default function Watchlist({ activeSymbol, onSelect, onAdd, activeStrateg
   const clearAllSignalsRef = useRef(clearAllSignals);
   useEffect(() => { clearAllSignalsRef.current = clearAllSignals; }, [clearAllSignals]);
 
-  // Live prices
+  // Live prices — inline implementation (replaces removed dead hook)
   const [prices,   setPrices]   = useState({});
   const [flashing, setFlashing] = useState({});
   const prevPricesRef = useRef({});
