@@ -33,8 +33,14 @@ BUG FIXES (this version):
             active trade being checked as part of the total.
 
   FIX-8  — _fetch_for_interval "3m" resampled from "1m" used wrong period key
-            "3m" → "2d" but 1m data only has 1d by default; changed to "7d"
-            so there is enough source data to resample even with bar capping.
+            "3m" → "2d" but 1m data only has 1d by default. Changed to "7d"
+            but this did not help because the backend caps 1m at 500 bars,
+            giving only 167 3m candles (~1.4 days) regardless of period.
+
+  FIX-3M — Changed 3m resample source from "1m" → "2m". The backend caps
+            1m data at 500 bars (confirmed in logs) but does NOT cap 2m data.
+            With 2m source + period="5d" we get ~935 bars → ~623 3m candles,
+            giving a proper multi-day 3m chart instead of a near-empty one.
 
   FIX-A  — WS default interval changed from "5m" to None so the watchlist scan
             cannot fire with a stale interval before the client sends subscribe.
@@ -778,15 +784,20 @@ def _ts_fn_daily(idx) -> str:
 
 
 _RESAMPLE_MAP = {
-    "3m": ("1m", "3min"),
+    # FIX-3M-1: Use 2m as source for 3m resampling instead of 1m.
+    # The backend YFinanceDataSource caps 1m data at 500 bars (confirmed from logs:
+    # "[DATA] Capping 1595 bars → 500 for interval=1m"). This means only ~167 3m bars
+    # were produced — just 1.4 trading days, giving a nearly empty chart.
+    # 2m data is not subject to the same cap, so 5d of 2m = ~935 bars → ~623 3m bars.
+    "3m": ("2m", "3min"),
 }
 
 _PERIOD_MAP = {
     "1m":  "1d",
     "2m":  "5d",
-    # FIX-8+D: "3m" resamples from 1m; use "7d" so even after backend bar-capping
-    # (500 bars) there are enough 1m bars to produce meaningful 3m candles.
-    "3m":  "7d",
+    # FIX-3M-2: Now sources from 2m (not 1m), so 5d gives ~935 2m bars → ~623 3m bars.
+    # 2m data is not capped by the backend, giving a proper multi-day 3m chart.
+    "3m":  "5d",
     "5m":  "5d",
     "15m": "10d",
     "30m": "20d",
@@ -810,7 +821,7 @@ def _fetch_for_interval(symbol: str, interval: str):
 
     if interval in _RESAMPLE_MAP:
         src_interval, rule = _RESAMPLE_MAP[interval]
-        period = _PERIOD_MAP.get(interval, "5d")  # FIX-8: use corrected period
+        period = _PERIOD_MAP.get(interval, "5d")  # FIX-3M: period optimised per source interval
         df_src = _data.fetch(symbol, src_interval, period)
         if df_src is None or df_src.empty:
             raise ValueError(f"No {src_interval} data for {symbol} to resample to {interval}")
